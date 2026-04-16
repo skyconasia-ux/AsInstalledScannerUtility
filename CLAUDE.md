@@ -7,7 +7,7 @@ Standalone PowerShell utility that collects comprehensive server information fro
 | File | Role |
 |------|------|
 | `Export-ServerInfo.bat` | Thin launcher — double-click on customer server. Calls the PS1. No logic here. |
-| `Export-ServerInfo.ps1` | All logic (~1010 lines). Produces two output files in its own directory. |
+| `Export-ServerInfo.ps1` | All logic (~1100 lines). Produces two output files in its own directory. |
 
 ## Output Files (written to same folder as script)
 | File | Contents |
@@ -65,39 +65,52 @@ Get-Content $f.FullName | Select-String -Pattern '\[Print Server\]' -Context 0,6
 
 | Lines | Section | Key data collected |
 |-------|---------|-------------------|
-| 1–86 | Setup / helpers | `Write-Out`, `Write-Log`, `Find-PrintApp`, output file init |
-| 87–155 | Section 1 — System Identity | VM/physical, hypervisor, UUID, BIOS, manufacturer/model |
-| 156–169 | Section 2 — Operating System | OS name, version, architecture, install date |
-| 170–203 | Section 3 — Hardware | RAM, CPU, cores/threads |
-| 189–204 | Section 3b — Storage | All drives: total/used/free GB |
-| 205–299 | Section 4 — Network | Per-NIC: MAC, IP, subnet, gateway, DNS1-N, DHCP/static, LMHOSTS, NetBIOS, link speed |
-| 300–317 | Section 5 — Domain | Domain name, AD membership |
-| 318–520 | Section 6 — Installed Software | PaperCut MF/NG, Equitrac/ControlSuite, YSoft SafeQ, AWMS2; checks registry, services, known dirs |
-| 521–642 | Section 7 — Roles & Features | .NET 3.5/4.8, Print Services, LPR, Telnet; all installed roles + features |
-| 643–890 | Section 8 — Database | SQL Server (registry, TCP/IP, Named Pipes, instances, ports), PostgreSQL, ODBC DSNs, remote DB connections |
-| 891–1113 | Section 8b — Print Server | Role status, spooler, per-queue loop (see below), drivers, ports |
-| 1114–1133 | Section 8c — Device Counts | FujiFilm/Fuji Xerox/FX device counts |
+| 1-86 | Setup / helpers | `Write-Out`, `Write-Log`, `Find-PrintApp`, output file init |
+| 87-155 | Section 1 - System Identity | VM/physical, hypervisor, UUID, BIOS, manufacturer/model |
+| 156-169 | Section 2 - Operating System | OS name, version, architecture, install date |
+| 170-203 | Section 3 - Hardware | RAM, CPU, cores/threads |
+| 189-204 | Section 3b - Storage | All drives: total/used/free GB |
+| 205-299 | Section 4 - Network | Per-NIC: MAC, IP, subnet, gateway, DNS1-N, DHCP/static, LMHOSTS, NetBIOS, link speed |
+| 300-317 | Section 5 - Domain | Domain name, AD membership |
+| 318-520 | Section 6 - Installed Software | PaperCut MF/NG, Equitrac/ControlSuite, YSoft SafeQ, AWMS2; checks registry, services, known dirs |
+| 521-642 | Section 7 - Roles & Features | .NET 3.5/4.8, Print Services, LPR, Telnet; all installed roles + features |
+| 643-890 | Section 8 - Database | SQL Server (registry, TCP/IP, Named Pipes, instances, ports), PostgreSQL, ODBC DSNs, remote DB connections |
+| 891-1130 | Section 8b - Print Server | Role status, spooler, per-queue loop (see below), drivers, ports |
+| 1131-1150 | Section 8c - Device Counts | FujiFilm/Fuji Xerox/FX device counts |
 
-### Per-Queue Fields (lines ~960–1090)
+### Per-Queue Fields (lines ~960-1100)
 Each queue outputs:
-- Name, Driver, Port, Status
-- Advanced Print Features (RAW_ONLY bit 0x1000 inverted)
-- Render on Client (bit 0x40000)
-- Paper Size (Get-PrintConfiguration.PaperSize)
-- 2-sided/Duplex (enum: OneSided / TwoSidedLongEdge / TwoSidedShortEdge)
-- Output Color (Get-PrintConfiguration.Color boolean)
-- Staple (PrintTicket XML XPath `//psf:Feature[contains(@name,'Staple')]`)
-- Offset Stacking (PrintTicket XML XPath `//psf:Feature[contains(@name,'OutputBin')]`, excludes InputBin)
-- dmColor / ICM Method (Win32_Printer.ICMMethod: 1=app, 2=OS, 3=device, 4=host)
-- Shared + Share Name, Listed in AD Directory (Win32_Printer.Attributes bits)
-- x64 driver name, x86 (32-bit) additional driver presence
+- **Name, Driver, Port, Status**
+- **Advanced Print Features** (RAW_ONLY bit 0x1000 inverted)
+- **Render on Client** (bit 0x40000)
+- **Paper Size** (`Get-PrintConfiguration.PaperSize`)
+- **2-sided/Duplex** (enum: OneSided / TwoSidedLongEdge / TwoSidedShortEdge)
+- **Output Color** (`Get-PrintConfiguration.Color` boolean)
+- **Staple** (PrintTicket XML XPath `//psf:Feature[contains(@name,'Staple') or contains(@name,'Finishing')]`)
+- **Offset Stacking** (PrintTicket XML XPath `//psf:Feature[contains(@name,'OutputBin')]`, excludes InputBin)
+- **Use Application Color** -- reads `psk:PageColorManagement` from the default PrintTicket XML.
+  This is the "Use the dmColor specified by the application" toggle in the FujiFilm driver UI.
+  - `psk:None` = **On** (driver passes application's dmColor through unchanged -- no driver colour override)
+  - `psk:System` = **Off** (Windows ICM manages colour conversion)
+  - `psk:Driver` = **Off** (driver handles ICM internally)
+  - `psk:Device` = **Off** (device hardware handles ICM)
+- **ICM Method** -- reads `dmICMMethod` from the Default DevMode binary at byte offset 188 (DWORD).
+  Values per `$icmMap`: 1=ICM Disabled, 2=ICM by OS, 3=ICM by device, 4=ICM by host.
+  **Note:** `Win32_Printer.ICMMethod` WMI property is unreliable for third-party drivers (always
+  returns 0/null); the Default DevMode registry binary is the authoritative source.
+- **Finisher/Punch/Booklet** (FujiFilm queues only) -- note that installable options
+  (finisher type, punch unit, booklet maker) are stored in FujiFilm's private driver data binary
+  and are **not exposed** via standard PrintTicket, PrintCapabilities XML, WMI, or System.Printing.
+  Verify these manually in Printer Properties > Device Settings tab.
+- **Shared + Share Name, Listed in AD Directory** (Win32_Printer.Attributes bits)
+- **x64 driver name, x86 (32-bit) additional driver presence**
 
 ---
 
-## Known Gotchas (hard-won — do not repeat these mistakes)
+## Known Gotchas (hard-won -- do not repeat these mistakes)
 
 ### 1. Unicode characters break the PS1 parser silently
-**Never** use box-drawing characters (`─`, `—`, `═`) or any non-ASCII in comments or strings.
+**Never** use box-drawing or non-ASCII characters in comments or strings.
 Use plain ASCII dashes only: `# ===` or `# ---`.
 
 ### 2. PowerShell enum value 0 is falsy
@@ -111,7 +124,7 @@ Always use `if ($cfg.DuplexingMode -ne $null)` for enum properties.
 `contains(@name,'Bin')` also matches `psk:JobInputBin`. Use:
 `contains(@name,'OutputBin') or (contains(@name,'Bin') and not(contains(@name,'Input')))`
 
-### 5. $pg.'Base Directory' — property names with spaces need quotes
+### 5. $pg.'Base Directory' -- property names with spaces need quotes
 `$pg.'Base Directory'` not `$pg.Base Directory`.
 
 ### 6. BAT cannot embed complex PowerShell inline
@@ -121,10 +134,64 @@ Any non-trivial PS1 logic must live in a separate `.ps1` file. The BAT is a thin
 `Write-Out` appends to `$script:outLines` (array); `Write-Log` appends to `$script:logLines`.
 Both are flushed to disk at the end. Do not write to files mid-script.
 
+### 8. Win32_Printer.ICMMethod is unreliable for third-party drivers
+For FujiFilm, Kofax, and most OEM drivers, `$wmi.ICMMethod` always returns `0` (null/not set).
+**Always read `dmICMMethod` directly from the Default DevMode registry binary:**
+```
+HKLM:\SYSTEM\CurrentControlSet\Control\Print\Printers\<PrinterName>\Default DevMode
+```
+Byte offset 188, DWORD (little-endian). Standard values: 1=disabled, 2=OS, 3=device, 4=host.
+
+### 9. FujiFilm drivers are named "FF *", not "FujiFilm *"
+Driver names like `FF Apeos C7071 PCL 6` and `FF Multi-model Print Driver 2` do **not** match
+`*FujiFilm*` or `*Fuji Xerox*`. Device count patterns must also include `FF *` and `*Apeos*`:
+```powershell
+$_.DriverName -like '*FujiFilm*' -or $_.DriverName -like '*Fuji Xerox*' -or
+$_.DriverName -like '*FUJIFILM*' -or $_.DriverName -like 'FF *' -or $_.DriverName -like '*Apeos*'
+```
+
+### 10. FujiFilm "Use the dmColor specified by the application" = PageColorManagement in PrintTicket
+The FujiFilm driver UI setting (Advanced > Printing Defaults > Advanced Settings > Items >
+"Use the dmColor specified by the application") maps to `psk:PageColorManagement` in the default
+PrintTicket XML retrieved by `Get-PrintConfiguration`:
+- `psk:None` = **On** (application's dmColor passes through unchanged)
+- `psk:System` / `psk:Driver` / `psk:Device` = **Off** (some form of ICM is active)
+
+Read it with XPath: `//psf:Feature[contains(@name,'PageColorManagement')]//psf:Option`
+
+This is **not** the same as `dmICMMethod` (gotcha #8 above). They are separate concepts:
+- `dmICMMethod` = which system handles colour profile conversion
+- `PageColorManagement` = whether the driver overrides the application's colour mode choice
+
+### 11. FujiFilm finisher/staple/punch/booklet are NOT readable via standard APIs
+Installable options (finisher type, punch unit, booklet maker) for FujiFilm FF drivers are stored
+in the driver's private DEVMODE binary blob (`PrinterData1`, `PrinterData2`, ... values under the
+`PrinterDriverData` registry key). They are **not** exposed via:
+- `System.Printing.PrintQueue.GetPrintCapabilities()` -- returns empty StaplingCapability
+- PrintCapabilities XML (`GetPrintCapabilitiesAsXml()`) -- no staple/finisher Feature nodes at all
+- `Win32_Printer` WMI -- no finishing properties
+- Default PrintTicket XML from `Get-PrintConfiguration` -- no staple/finisher Feature nodes
+
+The only reliable ways to verify these settings are:
+1. Open Printer Properties > Device Settings tab on the print server GUI
+2. Decode the FujiFilm private DEVMODE binary (requires FujiFilm SDK/documentation)
+
+The FujiFilm Apeos PCL6 private DEVMODE section (starts at byte 220) begins with the `FPXF`
+signature. The FF Multi-model Print Driver 2 private section starts at byte 220 with a version
+header followed by the driver name in Unicode, then settings data. Exact byte offsets are
+proprietary and not publicly documented.
+
+### 12. PrintCapabilities XML namespace for FujiFilm Apeos PCL6
+The Apeos PCL6 driver uses a custom XML namespace prefix:
+`xmlns:ns0000="http://www.fujifilm.com/fb/2021/04/printing/printticket"`
+FujiFilm-specific options (paper types, tray names, locale, resolution values) appear as `ns0000:*`.
+Standard job features (duplex, color, collate, orientation) still use the `psk:` namespace.
+Neither namespace exposes finishing/stapling options -- see gotcha #11.
+
 ---
 
-## Adding New Sections — Checklist
-1. Add `# === SECTION N — Name ===` header comment
+## Adding New Sections -- Checklist
+1. Add `# === SECTION N - Name ===` header comment
 2. Call `Write-Section "Section Name"` to write the `[Section Name]` header to output
 3. Write-Log each WMI/CIM/registry query before executing it
 4. Guard every external call with `-ErrorAction SilentlyContinue`
