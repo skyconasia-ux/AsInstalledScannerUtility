@@ -220,3 +220,25 @@ Neither namespace exposes finishing/stapling options -- use `Get-PrinterProperty
 3. Collect `ServerInfo_<HOST>_<TIMESTAMP>.txt`
 4. Drop that file into `ConsultantApp\data\Deployment\PMS\<CustomerName>\`
 5. Trigger index refresh in ConsultantApp and search by customer name
+
+---
+
+## Session State (last updated 2026-04-17)
+
+**Active VM:** CSTEMP (`192.168.60.150`) — Windows Server 2022, Kofax ControlSuite (Equitrac 6.5.2.191 / ControlSuite 1.5.0.2)
+
+**Script state:** `Export-ServerInfo.ps1` — all 10 fixes applied, ~1278 lines, syntax OK. Live at `C:\Temp\` on CSTEMP. Last pushed: commit `979b3b5`.
+
+**What was just done:**
+- Registry dump collected: `ControlSuite_Registry.txt` (123 KB) — key config, all 7 EQ* services Running, CAS DB on `.\SQLExpress`
+- DB structure dump collected: `ControlSuite_DB.txt` (11 KB) — 96 tables in `eqcas`, SQL Server 2022 Express
+- Both files at `C:\Users\quick\` locally
+
+**Immediate next step:**
+Query `cas_config` (800 rows) — the main ControlSuite config table. The DB collection script used `tbl*` naming and missed all `cas_*` tables entirely.
+```sql
+SELECT TOP 200 * FROM cas_config WITH (NOLOCK) ORDER BY 1
+```
+Run via SSH on CSTEMP or extend `collect_cs_db.ps1`.
+
+**See also:** `checkpoints.md` for full session checkpoint.
