@@ -2,3 +2,5 @@
 results/
 logs/
 *.log
+ServerInfo_*.txt
+ExportLog_*.txt
