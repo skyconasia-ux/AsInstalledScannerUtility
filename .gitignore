@@ -1,0 +1,4 @@
+.claude/
+results/
+logs/
+*.log
