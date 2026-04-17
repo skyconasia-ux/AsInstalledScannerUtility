@@ -1,3 +1,6 @@
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
 #Requires -Version 5.1
 <#
 .SYNOPSIS
@@ -211,7 +214,7 @@ Write-Log 'QUERY: Get-CimInstance Win32_NetworkAdapter (for connection status an
 
 $netbiosMap = @{ 0 = 'Default (via DHCP)'; 1 = 'Enabled'; 2 = 'Disabled' }
 
-# Get all enabled adapter configs (not just those with IPs — includes disconnected NICs)
+# Get all enabled adapter configs (not just those with IPs - includes disconnected NICs)
 $adapterConfigs = Get-CimInstance Win32_NetworkAdapterConfiguration |
                   Where-Object { $_.IPEnabled -eq $true }
 
@@ -922,6 +925,13 @@ if ($spooler) {
     Write-Field 'Spooler Startup Type'  $spooler.StartType
     Write-Log "RESULT: Spooler = $($spooler.Status), StartType = $($spooler.StartType)"
 }
+
+# --- Spool folder location ---
+Write-Log 'QUERY: HKLM DefaultSpoolDirectory (spool folder path)'
+$spoolFolder = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Printers' -Name DefaultSpoolDirectory -EA SilentlyContinue).DefaultSpoolDirectory
+if (-not $spoolFolder) { $spoolFolder = 'C:\Windows\System32\spool\PRINTERS (default)' }
+Write-Field 'Spool Folder' $spoolFolder
+Write-Log "RESULT: Spool folder = $spoolFolder"
 Write-Out ''
 
 # --- Load all WMI printers and x86 drivers once ---
@@ -929,7 +939,10 @@ Write-Log 'QUERY: Get-Printer, Get-CimInstance Win32_Printer, Get-PrinterDriver'
 $printers    = Get-Printer -ErrorAction SilentlyContinue
 $wmiPrinters = Get-CimInstance Win32_Printer -ErrorAction SilentlyContinue
 $allDrivers  = Get-PrinterDriver -ErrorAction SilentlyContinue
-$x86Drivers  = $allDrivers | Where-Object { $_.Environment -like '*x86*' }
+# Load drivers split by architecture using -PrinterEnvironment
+$driversX64 = @(Get-PrinterDriver -PrinterEnvironment 'Windows x64'     -EA SilentlyContinue)
+$driversX86 = @(Get-PrinterDriver -PrinterEnvironment 'Windows NT x86'  -EA SilentlyContinue)
+$x86DriverNames = $driversX86 | ForEach-Object { $_.Name }
 
 # Duplex map
 $duplexMap = @{
@@ -968,20 +981,40 @@ if ($printers) {
         Write-Log "QUERY: Get-PrintConfiguration -PrinterName '$($p.Name)'"
         $cfg = Get-PrintConfiguration -PrinterName $p.Name -ErrorAction SilentlyContinue
 
-        # Staple / Offset from PrintTicket XML
-        $stapleText = 'Unknown'
-        $offsetText = 'Unknown'
+        # Printing Defaults from PrintTicket XML
+        $stapleText    = 'Unknown'
+        $offsetText    = 'Unknown'
+        $colorMgmtText = 'Unknown'
         if ($cfg -and $cfg.PrintTicketXML) {
             [xml]$pt = $cfg.PrintTicketXML
             $ns = @{ psf = 'http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework';
                      psk = 'http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords' }
 
-            # Staple
-            $stapleNode = Select-Xml -Xml $pt -XPath "//psf:Feature[contains(@name,'Staple') or contains(@name,'staple')]//psf:Option" -Namespace $ns |
+            # PageColorManagement - maps to FujiFilm "Use the dmColor specified by the application":
+            #   psk:None   = On  (driver passes application's dmColor through unchanged)
+            #   psk:System = Off (Windows ICM manages colour conversion)
+            #   psk:Driver = Off (driver handles ICM internally)
+            #   psk:Device = Off (device hardware handles ICM)
+            $colorMgmtNode = Select-Xml -Xml $pt -XPath "//psf:Feature[contains(@name,'PageColorManagement')]//psf:Option" -Namespace $ns |
+                              Select-Object -First 1
+            if ($colorMgmtNode) {
+                $cmVal = $colorMgmtNode.Node.GetAttribute('name')
+                $colorMgmtText = switch -Wildcard ($cmVal) {
+                    '*:None'   { 'On  (passes application dmColor through; no driver override)' }
+                    '*:System' { 'Off (Windows system ICM manages colour)' }
+                    '*:Driver' { 'Off (driver manages ICM internally)' }
+                    '*:Device' { 'Off (device hardware manages ICM)' }
+                    default    { $cmVal }
+                }
+            }
+
+            # Staple (job-level default; FujiFilm finisher installable options live in
+            # driver private data, not the standard PrintTicket - see finisher note below)
+            $stapleNode = Select-Xml -Xml $pt -XPath "//psf:Feature[contains(@name,'Staple') or contains(@name,'staple') or contains(@name,'Finishing')]//psf:Option" -Namespace $ns |
                           Select-Object -First 1
             if ($stapleNode) {
                 $stapleVal  = $stapleNode.Node.GetAttribute('name')
-                $stapleText = if ($stapleVal -like '*None*' -or $stapleVal -like '*none*') { 'Disabled' } else { "Enabled ($stapleVal)" }
+                $stapleText = if ($stapleVal -like '*None*' -or $stapleVal -like '*none*') { 'Disabled (default job)' } else { "Enabled - $($stapleVal -replace '^.*:','')" }
             }
 
             # Output bin / offset stacking (match OutputBin only, not InputBin)
@@ -1005,11 +1038,19 @@ if ($printers) {
         $isPublished    = if ($wmi) { ($attrs -band $ATTR_PUBLISHED) -ne 0 } else { $p.Published }
 
         # x86 additional driver installed for this queue?
-        $has32bitDriver = ($x86Drivers | Where-Object { $_.Name -eq $p.DriverName }) -ne $null
+        $has32bitDriver = $x86DriverNames -contains $p.DriverName
 
-        # ICM / dmColor
-        $icmVal  = if ($wmi -and $wmi.ICMMethod) { [int]$wmi.ICMMethod } else { 0 }
-        $icmText = if ($icmMap.ContainsKey($icmVal)) { $icmMap[$icmVal] } else { 'Not available' }
+        # ICM method - read from Default DevMode binary at byte offset 188 (DWORD)
+        # Win32_Printer.ICMMethod is unreliable for third-party drivers; registry is authoritative
+        $icmText = 'Not available'
+        try {
+            $dmRegPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Print\Printers\$($p.Name)"
+            $dmBytes   = (Get-ItemProperty -Path $dmRegPath -Name 'Default DevMode' -EA Stop).'Default DevMode'
+            if ($dmBytes -and $dmBytes.Count -ge 192) {
+                $icmRaw  = [BitConverter]::ToInt32($dmBytes, 188)
+                $icmText = if ($icmMap.ContainsKey($icmRaw)) { $icmMap[$icmRaw] } else { "Method $icmRaw (driver-defined)" }
+            }
+        } catch { $icmText = 'Not available (registry read error)' }
 
         # Paper size
         $paperText = if ($cfg -and $cfg.PaperSize) { [string]$cfg.PaperSize } else { 'Unknown' }
@@ -1052,7 +1093,63 @@ if ($printers) {
         Write-Out "  Offset Stacking         : $offsetText"
         Write-Out ''
         Write-Out "  -- Advanced Settings --"
-        Write-Out "  dmColor (ICM Method)    : $icmText"
+        Write-Out "  Use Application Color   : $colorMgmtText"
+        Write-Out "  ICM Method              : $icmText"
+        # Finisher note for FF/FujiFilm: installable options are in driver private data
+        # Installable options (hardware config) via Get-PrinterProperty
+        $printerProps = $null
+        try { $printerProps = Get-PrinterProperty -PrinterName $p.Name -EA Stop } catch {}
+        if ($printerProps -and $printerProps.Count -gt 0) {
+            $pp = @{}
+            $printerProps | ForEach-Object { $pp[$_.PropertyName] = $_.Value }
+
+            # Finisher units installed
+            $finInst = @('A','B','C','D') | ForEach-Object {
+                $v = $pp["Config:OP_Finisher$_"]
+                if ($v -and $v -ne 'No') { "Finisher $_ ($v)" }
+            }
+            $finText = if ($finInst) { $finInst -join ', ' } else { 'None' }
+
+            # Staple capability
+            $stapleInstall = if ($pp['Config:DC_FIN_Staple'] -eq 'Yes') {
+                $extras = @()
+                if ($pp['Config:DC_FIN_FreeStaple'] -eq 'Yes') { $extras += 'FreeStaple' }
+                if ($pp['Config:DC_FIN_4Staple']    -eq 'Yes') { $extras += '4-staple'   }
+                'Yes' + $(if ($extras) { ' (' + ($extras -join ', ') + ')' } else { '' })
+            } else { 'No' }
+
+            # Punch capability
+            $punchInstall = if ($pp['Config:DC_FIN_Punch'] -eq 'Yes') {
+                $holes = @()
+                if ($pp['Config:OP_Punch_2_3'] -and $pp['Config:OP_Punch_2_3'] -ne 'No') { $holes += '2/3-hole' }
+                if ($pp['Config:OP_Punch_2_4'] -and $pp['Config:OP_Punch_2_4'] -ne 'No') { $holes += '2/4-hole' }
+                'Yes' + $(if ($holes) { ' (' + ($holes -join ', ') + ')' } else { '' })
+            } else { 'No' }
+
+            # Booklet maker
+            $bookletVal     = $pp['Config:OP_Booklet']
+            $bookletInstall = if ($bookletVal -and $bookletVal -ne 'No') {
+                $bExtra = @()
+                if ($pp['Config:DC_FIN_BiFold'] -eq 'Yes') { $bExtra += 'BiFold' }
+                if ($pp['Config:DC_FIN_CZFold'] -eq 'Yes') { $bExtra += 'CZFold' }
+                $bookletVal + $(if ($bExtra) { ' (' + ($bExtra -join ', ') + ')' } else { '' })
+            } else { 'No' }
+
+            # Offset stacking
+            $offsetInstall = if ($pp['Config:DC_OffsetStacking'] -eq 'Yes') { 'Yes' } else { 'No' }
+
+            Write-Out ''
+            Write-Out '  -- Installable Options --'
+            Write-Out "  Finisher Installed      : $finText"
+            Write-Out "  Staple Capability       : $stapleInstall"
+            Write-Out "  Punch Capability        : $punchInstall"
+            Write-Out "  Booklet Maker           : $bookletInstall"
+            Write-Out "  Offset Stacking         : $offsetInstall"
+        } elseif ($p.DriverName -like 'FF *' -or $p.DriverName -like '*FujiFilm*' -or $p.DriverName -like '*Apeos*') {
+            Write-Out ''
+            Write-Out '  -- Installable Options --'
+            Write-Out '  N/A (software/virtual driver - no hardware options)'
+        }
         Write-Out ''
         Write-Out "  -- Sharing & Directory --"
         Write-Out "  Shared                  : $(if ($isShared) { "Yes (Share name: $shareName)" } else { 'No' })"
@@ -1065,9 +1162,13 @@ if ($printers) {
 
         Write-Log "RESULT: Queue=$($p.Name) driver=$($p.DriverName) duplex=$duplexText color=$colorText paper=$paperText staple=$stapleText shared=$isShared published=$isPublished x86=$has32bitDriver"
     }
-    $ffCount = ($printers | Where-Object { $_.DriverName -like '*FujiFilm*' -or $_.DriverName -like '*Fuji Xerox*' -or $_.DriverName -like '*FUJIFILM*' }).Count
+    $ffCount = ($printers | Where-Object {
+        $_.DriverName -like '*FujiFilm*'  -or $_.DriverName -like '*Fuji Xerox*' -or
+        $_.DriverName -like '*FUJIFILM*'  -or $_.DriverName -like 'FF *'          -or
+        $_.DriverName -like '*Apeos*'
+    }).Count
     $fxCount = ($printers | Where-Object { $_.DriverName -like '*Fuji Xerox*' -or $_.DriverName -like '*FX*' }).Count
-    Write-Log "RESULT: $($printers.Count) queues total, FujiFilm=$ffCount, Fuji Xerox=$fxCount"
+    Write-Log "RESULT: $($printers.Count) queues total, FujiFilm/FF=$ffCount, Fuji Xerox=$fxCount"
 } else {
     Write-Out 'Printer Queues: None detected'
     Write-Log 'RESULT: No print queues found'
@@ -1076,16 +1177,28 @@ Write-Out ''
 
 # --- Printer Drivers ---
 Write-Log 'QUERY: Get-PrinterDriver (all installed drivers)'
-$drivers = Get-PrinterDriver -ErrorAction SilentlyContinue
-if ($drivers) {
-    Write-Out "Installed Printer Drivers ($($drivers.Count) total):"
-    foreach ($drv in ($drivers | Sort-Object Name)) {
+# Use the already-loaded per-arch driver lists
+$drivers = $driversX64 + $driversX86
+if ($drivers -and $drivers.Count -gt 0) {
+    $x64Count = $driversX64.Count; $x86Count = $driversX86.Count
+    Write-Out "Installed Printer Drivers ($x64Count x64, $x86Count x86):"
+    Write-Out "  --- x64 (64-bit) ---"
+    foreach ($drv in ($driversX64 | Sort-Object Name)) {
         Write-Out "  Driver  : $($drv.Name)"
         Write-Out "  Version : $($drv.MajorVersion)"
         Write-Out "  Print Processor : $($drv.PrintProcessor)"
         Write-Out "  ---"
     }
-    Write-Log "RESULT: $($drivers.Count) drivers installed"
+    if ($driversX86.Count -gt 0) {
+        Write-Out "  --- x86 (32-bit) ---"
+        foreach ($drv in ($driversX86 | Sort-Object Name)) {
+            Write-Out "  Driver  : $($drv.Name)"
+            Write-Out "  Version : $($drv.MajorVersion)"
+            Write-Out "  Print Processor : $($drv.PrintProcessor)"
+            Write-Out "  ---"
+        }
+    }
+    Write-Log "RESULT: $x64Count x64 drivers, $x86Count x86 drivers installed"
 } else {
     Write-Out 'Printer Drivers: None detected'
     Write-Log 'RESULT: No printer drivers found'
@@ -1117,7 +1230,11 @@ if ($ports) {
 Write-Section 'Device Counts'
 Write-Log 'QUERY: Summarising FujiFilm/Fuji Xerox queues from printer list'
 if ($printers) {
-    $ffCount = ($printers | Where-Object { $_.DriverName -like '*FujiFilm*' -or $_.DriverName -like '*Fuji Xerox*' -or $_.DriverName -like '*FUJIFILM*' }).Count
+    $ffCount = ($printers | Where-Object {
+        $_.DriverName -like '*FujiFilm*'  -or $_.DriverName -like '*Fuji Xerox*' -or
+        $_.DriverName -like '*FUJIFILM*'  -or $_.DriverName -like 'FF *'          -or
+        $_.DriverName -like '*Apeos*'
+    }).Count
     $fxCount = ($printers | Where-Object { $_.DriverName -like '*Fuji Xerox*' -or $_.DriverName -like '*FX*' }).Count
     Write-Field 'FujiFilm Devices' ([string]$ffCount)
     Write-Field 'FF Devices'       ([string]$ffCount)
@@ -1154,3 +1271,8 @@ Write-Host '  Copy the DATA FILE to:'
 Write-Host '  ConsultantApp\data\Deployment\PMS\<CustomerName>\'
 Write-Host '============================================================'
 Write-Host ''
+
+
+
+
+
