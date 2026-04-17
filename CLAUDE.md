@@ -98,10 +98,13 @@ Each queue outputs:
   Values per `$icmMap`: 1=ICM Disabled, 2=ICM by OS, 3=ICM by device, 4=ICM by host.
   **Note:** `Win32_Printer.ICMMethod` WMI property is unreliable for third-party drivers (always
   returns 0/null); the Default DevMode registry binary is the authoritative source.
-- **Finisher/Punch/Booklet** (FujiFilm queues only) -- note that installable options
-  (finisher type, punch unit, booklet maker) are stored in FujiFilm's private driver data binary
-  and are **not exposed** via standard PrintTicket, PrintCapabilities XML, WMI, or System.Printing.
-  Verify these manually in Printer Properties > Device Settings tab.
+- **Installable Options** (via `Get-PrinterProperty`) -- reads hardware configuration stored in the driver:
+  - `Finisher Installed` -- derived from `Config:OP_FinisherA/B/C/D` (non-`No` values shown)
+  - `Staple Capability` -- from `Config:DC_FIN_Staple`, `Config:DC_FIN_FreeStaple`, `Config:DC_FIN_4Staple`
+  - `Punch Capability` -- from `Config:DC_FIN_Punch`, `Config:OP_Punch_2_3`, `Config:OP_Punch_2_4`
+  - `Booklet Maker` -- from `Config:OP_Booklet`, `Config:DC_FIN_BiFold`, `Config:DC_FIN_CZFold`
+  - `Offset Stacking` -- from `Config:DC_OffsetStacking`
+  - Virtual/software drivers (e.g. FF Multi-model Print Driver 2) return no properties -- outputs `N/A`
 - **Shared + Share Name, Listed in AD Directory** (Win32_Printer.Attributes bits)
 - **x64 driver name, x86 (32-bit) additional driver presence**
 
@@ -163,30 +166,41 @@ This is **not** the same as `dmICMMethod` (gotcha #8 above). They are separate c
 - `dmICMMethod` = which system handles colour profile conversion
 - `PageColorManagement` = whether the driver overrides the application's colour mode choice
 
-### 11. FujiFilm finisher/staple/punch/booklet are NOT readable via standard APIs
-Installable options (finisher type, punch unit, booklet maker) for FujiFilm FF drivers are stored
-in the driver's private DEVMODE binary blob (`PrinterData1`, `PrinterData2`, ... values under the
-`PrinterDriverData` registry key). They are **not** exposed via:
+### 11. Use Get-PrinterProperty for FujiFilm finisher/staple/punch/booklet installable options
+`Get-PrinterProperty -PrinterName <name>` is the correct cmdlet for reading hardware installable
+options (finisher unit type, staple, punch, booklet maker). It returns `Config:OP_*` and
+`Config:DC_FIN_*` properties with human-readable string values:
+
+```powershell
+# Example output for FF Apeos C7071 PCL 6:
+Config:OP_FinisherB      = GB_GB4
+Config:OP_FinisherC      = GC4_GC5
+Config:DC_FIN_Staple     = Yes
+Config:DC_FIN_FreeStaple = Yes
+Config:DC_FIN_Punch      = Yes
+Config:OP_Punch_2_3      = 2_3Holes
+Config:OP_Punch_2_4      = 2_4Holes
+Config:OP_Booklet        = Booklet
+Config:DC_FIN_BiFold     = Yes
+Config:DC_FIN_CZFold     = Yes
+Config:DC_OffsetStacking = Yes
+```
+
+**Virtual/software drivers** (e.g. FF Multi-model Print Driver 2 used for follow-you queues)
+return **nothing** from `Get-PrinterProperty` -- this is expected, they have no physical hardware.
+
+The following APIs do **not** work for FujiFilm finisher options and should not be used:
 - `System.Printing.PrintQueue.GetPrintCapabilities()` -- returns empty StaplingCapability
-- PrintCapabilities XML (`GetPrintCapabilitiesAsXml()`) -- no staple/finisher Feature nodes at all
+- PrintCapabilities XML -- no staple/finisher Feature nodes at all for FF drivers
 - `Win32_Printer` WMI -- no finishing properties
-- Default PrintTicket XML from `Get-PrintConfiguration` -- no staple/finisher Feature nodes
-
-The only reliable ways to verify these settings are:
-1. Open Printer Properties > Device Settings tab on the print server GUI
-2. Decode the FujiFilm private DEVMODE binary (requires FujiFilm SDK/documentation)
-
-The FujiFilm Apeos PCL6 private DEVMODE section (starts at byte 220) begins with the `FPXF`
-signature. The FF Multi-model Print Driver 2 private section starts at byte 220 with a version
-header followed by the driver name in Unicode, then settings data. Exact byte offsets are
-proprietary and not publicly documented.
+- Default PrintTicket XML -- no staple/finisher Feature nodes
 
 ### 12. PrintCapabilities XML namespace for FujiFilm Apeos PCL6
 The Apeos PCL6 driver uses a custom XML namespace prefix:
 `xmlns:ns0000="http://www.fujifilm.com/fb/2021/04/printing/printticket"`
 FujiFilm-specific options (paper types, tray names, locale, resolution values) appear as `ns0000:*`.
 Standard job features (duplex, color, collate, orientation) still use the `psk:` namespace.
-Neither namespace exposes finishing/stapling options -- see gotcha #11.
+Neither namespace exposes finishing/stapling options -- use `Get-PrinterProperty` instead (gotcha #11).
 
 ---
 
