@@ -14,13 +14,15 @@ Two related tools in one repo:
 |------|------|
 | `Export-ServerInfo.bat` | Thin launcher — double-click on customer server. |
 | `Export-ServerInfo.ps1` | Server info collector (~1570 lines). |
-| `tools/EQ-Snapshot.ps1` | BEFORE/AFTER snapshot: SQL row counts + BCP content + SQLite EQVar + registry + file timestamps. |
-| `tools/EQ-Diff.ps1` | Compares BEFORE/AFTER snapshots; outputs diff report. |
-| `tools/Export-EquitracConfig.ps1` | Standalone: reads live config from SQLite + BCP + registry and writes a human-readable export. |
-| `tools/EQ-Snapshot-BEFORE.bat` | Launcher for snapshot BEFORE changes. |
-| `tools/EQ-Snapshot-AFTER.bat` | Launcher for snapshot AFTER changes. |
-| `tools/EQ-Diff.bat` | Launcher for diff. |
-| `tools/Export-EquitracConfig.bat` | Launcher for config export. |
+| `AsInstalledScanner.bat` | Thin launcher — double-click for interactive menu, or pass a mode arg. |
+| `tools/AsInstalledScanner.ps1` | **Primary tool (~1020 lines).** 4 modes: Before/After/Compare/Full. Interactive menu or `-Mode` param. Outputs per-run folder with FULL.txt, SUMMARY.txt, REPORT.html, metadata.json, raw TSVs + BCP files. |
+| `tools/EQ-Snapshot.ps1` | Legacy: BEFORE/AFTER snapshot (SQL row counts + BCP + SQLite EQVar + registry + file timestamps). |
+| `tools/EQ-Diff.ps1` | Legacy: Compares BEFORE/AFTER snapshots; outputs diff report. |
+| `tools/Export-EquitracConfig.ps1` | Legacy standalone config export (superseded by AsInstalledScanner -Mode After). |
+| `tools/EQ-Snapshot-BEFORE.bat` | Legacy launcher. |
+| `tools/EQ-Snapshot-AFTER.bat` | Legacy launcher. |
+| `tools/EQ-Diff.bat` | Legacy launcher. |
+| `tools/Export-EquitracConfig.bat` | Legacy launcher. |
 | `docs/equitrac-storage-map.md` | **Master reference** — where every ControlSuite setting is stored, confirmed change mappings, discovery notes. |
 | `docs/patterns.md` | Extraction patterns for ConsultantApp AI. |
 
@@ -37,35 +39,55 @@ Two related tools in one repo:
 
 ## EQ Tools — Common Commands
 
-### Deploy EQ tools to server
+### Deploy AsInstalledScanner to server
+```powershell
+scp tools/AsInstalledScanner.ps1 Administrator@192.168.60.150:C:/Temp/AsInstalledScanner.ps1
+```
+
+### Run Before (baseline - before making UI changes)
+```powershell
+ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\AsInstalledScanner.ps1 -Mode Before"
+```
+
+### Run After (capture current state + HTML report)
+```powershell
+ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\AsInstalledScanner.ps1 -Mode After"
+```
+
+### Run Compare (diff latest Before vs After)
+```powershell
+ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\AsInstalledScanner.ps1 -Mode Compare"
+```
+
+### Run Full (After + Compare in one pass)
+```powershell
+ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\AsInstalledScanner.ps1 -Mode Full"
+```
+
+### Fetch HTML report
+```powershell
+scp "Administrator@192.168.60.150:C:/Temp/Output/CSTEMP_*_After/After_REPORT.html" C:\Users\quick\Desktop\
+```
+
+### Output folder structure (per run)
+```
+C:\Temp\Output\CSTEMP_YYYYMMDD_HHMMSS_After\
+  After_FULL.txt          # Source of truth (all settings, full EQVar dump)
+  After_SUMMARY.txt       # Key counts + quick settings
+  After_REPORT.html       # Self-contained HTML with sidebar, search, collapsible sections
+  metadata.json           # Structured JSON for programmatic use
+  eqvar_dce.tsv           # Raw EQVar snapshot (for Compare)
+  eqvar_dre.tsv           # Raw DRE EQVar snapshot
+  bcp_cas_config.txt      # BCP dumps (for Compare)
+  bcp_cat_pricelist.txt
+  bcp_cas_scan_alias.txt
+  ... (all 9 tables)
+```
+
+### Legacy tools (still functional)
 ```powershell
 scp tools/EQ-Snapshot.ps1 Administrator@192.168.60.150:C:/Temp/EQ-Snapshot.ps1
 scp tools/EQ-Diff.ps1     Administrator@192.168.60.150:C:/Temp/EQ-Diff.ps1
-```
-
-### Take BEFORE snapshot (before making UI changes)
-```powershell
-ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\EQ-Snapshot.ps1 -Label BEFORE"
-```
-
-### Take AFTER snapshot (after making UI changes)
-```powershell
-ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\EQ-Snapshot.ps1 -Label AFTER"
-```
-
-### Run diff
-```powershell
-ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\EQ-Diff.ps1"
-```
-
-### Run config export
-```powershell
-ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\Export-EquitracConfig.ps1"
-```
-
-### Fetch diff report
-```powershell
-scp Administrator@192.168.60.150:"C:/Temp/EQ_Snapshots/EQ_Diff_Report.txt" C:\Users\quick\
 ```
 
 ---
@@ -276,35 +298,29 @@ Neither namespace exposes finishing/stapling options -- use `Get-PrinterProperty
 
 ---
 
-## Session State (last updated 2026-05-05 Session 7)
+## Session State (last updated 2026-05-05 Session 8)
 
 **Workflow:** Edit locally → scp to VM → run via SSH → scp results back → push to GitHub.
 **SSH:** `ssh Administrator@192.168.60.150` — no password prompt (key auth configured).
 
 **Active VM:** CSTEMP (`192.168.60.150`) — Windows Server 2022, Kofax ControlSuite (Equitrac 6.5.2.191 / ControlSuite 1.5.0.2)
 
-**EQ tools on server:** `C:\Temp\EQ-Snapshot.ps1`, `C:\Temp\EQ-Diff.ps1` — both deployed and verified working.
+**Primary tool:** `tools/AsInstalledScanner.ps1` — deployed to `C:\Temp\AsInstalledScanner.ps1`. All 4 modes tested and verified working. Output at `C:\Temp\Output\HOSTNAME_YYYYMMDD_HHMMSS_MODE\`.
 
-**Export-EquitracConfig.ps1:** Built locally at `tools/Export-EquitracConfig.ps1`. Needs SCP deploy before first run.
+**Legacy tools on server:** `C:\Temp\EQ-Snapshot.ps1`, `C:\Temp\EQ-Diff.ps1`, `C:\Temp\Export-EquitracConfig.ps1` — still functional.
 
 **sqlite3.exe:** `C:\Windows\System32\sqlite3.exe` (version 3.53.0) — installed on server.
 
-**SQL quirk:** All eqcas table columns have empty-string names. Only BCP reads work. Connection string requires `TrustServerCertificate=True`. Credentials: `sa` / `FujiFilm_11111`.
+**SQL quirk:** All eqcas table columns have empty-string names. Only BCP reads work. Credentials: `sa` / `FujiFilm_11111` on `.\SQLExpress`.
 
-**DB note:** `sa` account password is `FujiFilm_11111` on `.\SQLExpress` (eqcas database).
+**EQVar config is mirrored:** `cas||` and `dce||` keys exist in both DCE_config.db3 AND DREEQVar.db3. Read from DCE_config.db3 as canonical.
 
-**EQVar config is mirrored:** `cas||` and `dce||` keys exist in both DCE_config.db3 AND DREEQVar.db3. Read from DCE_config.db3 as canonical; DRE has a copy for offline operation.
+**Known bug fixed (2026-05-05 Session 8):**
+- `Write-HtmlReport` return value was leaking into `Run-After` output stream, corrupting the `$afterDir` path used in `Run-Full`. Fixed with `$null = Write-HtmlReport ...`.
+- EQVar TSV format broken by multi-line XML values (embedded `\n` in SQLite values split TSV rows). Fixed by adding `replace(replace(Value,char(10),' '),char(13),''))` to the TSV export query.
 
-**Noise filter fix (2026-05-05):** Regex patterns `'\\.log$'` etc. in EQ-Diff.ps1 were broken (matched backslash+anychar, not dot). Fixed to `'[.]log$'` etc.
+**Noise filter fix (2026-05-05 Session 7):** Regex `'\\.log$'` → `'[.]log$'` in EQ-Diff.ps1.
 
 **Script state:** `Export-ServerInfo.ps1` — ~1570 lines, syntax OK. GitHub: `skyconasia-ux/AsInstalledScannerUtility`.
 
 **See also:** `docs/equitrac-storage-map.md` — full map of where every ControlSuite setting lives.
-
-**Immediate next step:**
-```powershell
-powershell vm2.ps1 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\AsInstalledScanner\Export-ServerInfo.ps1"
-scp Administrator@192.168.60.150:"C:/Temp/AsInstalledScanner/results/ServerInfo_CSTEMP_*.txt" C:\Users\quick\
-```
-
-**See also:** `checkpoints.md` for full checkpoint + history.
