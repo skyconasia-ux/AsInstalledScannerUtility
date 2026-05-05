@@ -988,20 +988,29 @@ function Write-HtmlReport {
     $smtp = if ($data.SmtpServer) { "$($data.SmtpServer):$($data.SmtpPort)" } else { 'Not set' }
     $wd   = $data.WinData
     $cards = @(
-        @{L='Platform';    V=(HE (if($wd){$wd.Platform}else{''}))},
-        @{L='OS';          V=(HE (if($wd){$wd.OsName -replace 'Windows Server ','Server '}else{''}))},
-        @{L='RAM';         V=(HE (if($wd){$wd.Ram}else{''}))},
-        @{L='Print Queues';V=(HE (if($wd){"$($wd.PrintQueues.Count)"}else{''}))},
-        @{L='EQ Components';V="$($data.Components.Count)"},
-        @{L='Price Lists'; V="$($data.PriceLists.Count)"},
-        @{L='Workflows';   V="$($data.Workflows.Count)"},
-        @{L='SMTP';        V=(HE $smtp)},
-        @{L='Currency';    V=(HE $data.Currency)},
-        @{L='License Host';V=(HE $data.LicenseHost)}
+        # Windows server cards
+        @{L='Platform';     V=(HE (if($wd){$wd.Platform}else{''}));      G='win'},
+        @{L='OS';           V=(HE (if($wd){$wd.OsName -replace 'Windows Server ','WS '}else{''})); G='win'},
+        @{L='RAM';          V=(HE (if($wd){$wd.Ram}else{''}));           G='win'},
+        @{L='Print Queues'; V=(HE (if($wd){"$($wd.PrintQueues.Count)"}else{''})); G='win'},
+        # EQ / ControlSuite cards
+        @{L='Components';   V="$($data.Components.Count)";              G='eq'},
+        @{L='Price Lists';  V="$($data.PriceLists.Count)";              G='eq'},
+        @{L='Workflows';    V="$($data.Workflows.Count)";               G='eq'},
+        @{L='Pull Groups';  V="$($data.PullGroups.Count)";              G='eq'},
+        @{L='Users';        V="$($data.Users.Count)";                   G='eq'},
+        @{L='SMTP';         V=(HE $smtp);                               G='eq'},
+        @{L='Currency';     V=(HE $data.Currency);                      G='eq'},
+        @{L='License Host'; V=(HE $data.LicenseHost);                   G='eq'}
     )
-    $cardsHtml = ($cards | ForEach-Object {
-        "<div class='scard'><div class='lbl'>$($_.L)</div><div class='val'>$($_.V)</div></div>"
+    $winCards = ($cards | Where-Object { $_.G -eq 'win' } | ForEach-Object {
+        "<div class='scard sc-win'><div class='lbl'>$($_.L)</div><div class='val'>$($_.V)</div></div>"
     }) -join ''
+    $eqCards  = ($cards | Where-Object { $_.G -eq 'eq'  } | ForEach-Object {
+        "<div class='scard sc-eq'><div class='lbl'>$($_.L)</div><div class='val'>$($_.V)</div></div>"
+    }) -join ''
+    $cardsHtml = "<div class='srow-lbl'>Windows Server</div><div class='sgrid'>$winCards</div>" +
+                 "<div class='srow-lbl' style='margin-top:8px'>ControlSuite</div><div class='sgrid'>$eqCards</div>"
 
     # ============================================================
     # WINDOWS HTML SECTIONS
@@ -1308,6 +1317,9 @@ table.kv .v.e{color:#bbb;font-style:italic}
 pre#rawpre{background:#1e1e1e;color:#d4d4d4;padding:14px;border-radius:6px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all}
 mark{background:#ffd600;color:#000;border-radius:2px}
 .hi{display:none!important}
+.srow-lbl{font-size:10px;font-weight:bold;color:#6ab;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.sc-win{background:rgba(100,180,255,.12)!important;border-left:2px solid #4fa8e8}
+.sc-eq{background:rgba(255,200,100,.10)!important;border-left:2px solid #e8a84f}
 '@
 
     $js = @'
