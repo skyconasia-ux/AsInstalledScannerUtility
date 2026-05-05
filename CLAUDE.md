@@ -1,23 +1,76 @@
 # CLAUDE.md — AsInstalledScanner
 
 ## Purpose
-Standalone PowerShell utility that collects comprehensive server information from a customer's Windows Server. Output is a plain-text data file that can be dropped into ConsultantApp (`data/Deployment/PMS/<CustomerName>/`) for AI-assisted extraction.
+Two related tools in one repo:
 
-## Files
-| File | Role |
-|------|------|
-| `Export-ServerInfo.bat` | Thin launcher — double-click on customer server. Calls the PS1. No logic here. |
-| `Export-ServerInfo.ps1` | All logic (~1100 lines). Produces two output files in its own directory. |
-
-## Output Files (written to same folder as script)
-| File | Contents |
-|------|----------|
-| `ServerInfo_<HOST>_<TIMESTAMP>.txt` | Structured data (drop into ConsultantApp) |
-| `ExportLog_<HOST>_<TIMESTAMP>.txt` | Audit trail — every query/action logged for cybersec review |
+1. **Export-ServerInfo** — collects comprehensive server hardware / print-queue info from any Windows Server. Output drops into ConsultantApp for AI-assisted extraction.
+2. **Equitrac Config Tools** — BEFORE/AFTER snapshot + diff + standalone config export for Kofax ControlSuite / Equitrac 6 servers. Discovers where every Web UI setting is stored, and exports the current config to a readable file.
 
 ---
 
-## Common Commands (copy-paste ready)
+## File Map
+
+| File | Role |
+|------|------|
+| `Export-ServerInfo.bat` | Thin launcher — double-click on customer server. |
+| `Export-ServerInfo.ps1` | Server info collector (~1570 lines). |
+| `tools/EQ-Snapshot.ps1` | BEFORE/AFTER snapshot: SQL row counts + BCP content + SQLite EQVar + registry + file timestamps. |
+| `tools/EQ-Diff.ps1` | Compares BEFORE/AFTER snapshots; outputs diff report. |
+| `tools/Export-EquitracConfig.ps1` | Standalone: reads live config from SQLite + BCP + registry and writes a human-readable export. |
+| `tools/EQ-Snapshot-BEFORE.bat` | Launcher for snapshot BEFORE changes. |
+| `tools/EQ-Snapshot-AFTER.bat` | Launcher for snapshot AFTER changes. |
+| `tools/EQ-Diff.bat` | Launcher for diff. |
+| `tools/Export-EquitracConfig.bat` | Launcher for config export. |
+| `docs/equitrac-storage-map.md` | **Master reference** — where every ControlSuite setting is stored, confirmed change mappings, discovery notes. |
+| `docs/patterns.md` | Extraction patterns for ConsultantApp AI. |
+
+## Output Files
+
+| File | Contents |
+|------|----------|
+| `results/ServerInfo_<HOST>_<TIMESTAMP>.txt` | Structured data (drop into ConsultantApp) |
+| `results/ExportLog_<HOST>_<TIMESTAMP>.txt` | Audit trail |
+| `results/EquitracConfig_<HOST>_<TIMESTAMP>.txt` | ControlSuite config export (from Export-EquitracConfig.ps1) |
+| `C:\Temp\EQ_Snapshots\EQ_Diff_Report.txt` | Latest diff report (on server) |
+
+---
+
+## EQ Tools — Common Commands
+
+### Deploy EQ tools to server
+```powershell
+scp tools/EQ-Snapshot.ps1 Administrator@192.168.60.150:C:/Temp/EQ-Snapshot.ps1
+scp tools/EQ-Diff.ps1     Administrator@192.168.60.150:C:/Temp/EQ-Diff.ps1
+```
+
+### Take BEFORE snapshot (before making UI changes)
+```powershell
+ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\EQ-Snapshot.ps1 -Label BEFORE"
+```
+
+### Take AFTER snapshot (after making UI changes)
+```powershell
+ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\EQ-Snapshot.ps1 -Label AFTER"
+```
+
+### Run diff
+```powershell
+ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\EQ-Diff.ps1"
+```
+
+### Run config export
+```powershell
+ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\Export-EquitracConfig.ps1"
+```
+
+### Fetch diff report
+```powershell
+scp Administrator@192.168.60.150:"C:/Temp/EQ_Snapshots/EQ_Diff_Report.txt" C:\Users\quick\
+```
+
+---
+
+## Export-ServerInfo — Common Commands (copy-paste ready)
 
 ### Syntax check (run this BEFORE every test run)
 ```powershell
@@ -223,16 +276,34 @@ Neither namespace exposes finishing/stapling options -- use `Get-PrinterProperty
 
 ---
 
-## Session State (last updated 2026-04-17 Session 2)
+## Session State (last updated 2026-05-05 Session 7)
+
+**Workflow:** Edit locally → scp to VM → run via SSH → scp results back → push to GitHub.
+**SSH:** `ssh Administrator@192.168.60.150` — no password prompt (key auth configured).
 
 **Active VM:** CSTEMP (`192.168.60.150`) — Windows Server 2022, Kofax ControlSuite (Equitrac 6.5.2.191 / ControlSuite 1.5.0.2)
 
-**Script state:** `Export-ServerInfo.ps1` — ~1570 lines, syntax OK. Live at `C:\Temp\AsInstalledScanner\` on CSTEMP. Outputs go to `results\`, trace log to `logs\`.
+**EQ tools on server:** `C:\Temp\EQ-Snapshot.ps1`, `C:\Temp\EQ-Diff.ps1` — both deployed and verified working.
+
+**Export-EquitracConfig.ps1:** Built locally at `tools/Export-EquitracConfig.ps1`. Needs SCP deploy before first run.
+
+**sqlite3.exe:** `C:\Windows\System32\sqlite3.exe` (version 3.53.0) — installed on server.
+
+**SQL quirk:** All eqcas table columns have empty-string names. Only BCP reads work. Connection string requires `TrustServerCertificate=True`. Credentials: `sa` / `FujiFilm_11111`.
+
+**DB note:** `sa` account password is `FujiFilm_11111` on `.\SQLExpress` (eqcas database).
+
+**EQVar config is mirrored:** `cas||` and `dce||` keys exist in both DCE_config.db3 AND DREEQVar.db3. Read from DCE_config.db3 as canonical; DRE has a copy for offline operation.
+
+**Noise filter fix (2026-05-05):** Regex patterns `'\\.log$'` etc. in EQ-Diff.ps1 were broken (matched backslash+anychar, not dot). Fixed to `'[.]log$'` etc.
+
+**Script state:** `Export-ServerInfo.ps1` — ~1570 lines, syntax OK. GitHub: `skyconasia-ux/AsInstalledScannerUtility`.
+
+**See also:** `docs/equitrac-storage-map.md` — full map of where every ControlSuite setting lives.
 
 **Immediate next step:**
-Run script on VM and pull results:
 ```powershell
-ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\AsInstalledScanner\Export-ServerInfo.ps1"
+powershell vm2.ps1 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\AsInstalledScanner\Export-ServerInfo.ps1"
 scp Administrator@192.168.60.150:"C:/Temp/AsInstalledScanner/results/ServerInfo_CSTEMP_*.txt" C:\Users\quick\
 ```
 

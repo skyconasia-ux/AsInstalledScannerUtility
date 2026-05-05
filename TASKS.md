@@ -4,6 +4,32 @@ Status legend: `[x]` done · `[-]` partial / documented limitation · `[ ]` not 
 
 ---
 
+## EQ Tools — Equitrac/ControlSuite Config Discovery
+
+### Completed
+
+- [x] **EQ-Snapshot.ps1** — captures SQL row counts, BCP content dumps (9 config tables), registry, SQLite EQVar, file timestamps. Deployed at `C:\Temp\EQ-Snapshot.ps1` on CSTEMP.
+- [x] **EQ-Diff.ps1** — compares BEFORE/AFTER snapshots. 4 sections: SQL row counts, SQL BCP content (catches UPDATE), SQLite EQVar, registry, files. Noise filter suppresses log/cache files.
+- [x] **Export-EquitracConfig.ps1** — standalone config export. Reads live SQLite EQVar databases + BCP table dumps. Sections: versions, auth, SMTP, job management, quotas, pricing, workflows, pull groups, users, full EQVar dump, registry summary.
+- [x] **Noise filter regex fix** — `'\\.log$'` → `'[.]log$'` etc. (double-backslash bug matched `\<anychar>log` not `.log`).
+- [x] **BCP content diff** — added to catch UPDATE operations that row-count diff misses. Confirmed: workflow rename, price edits, new price list all detected.
+- [x] **SQLite EQVar diff** — reads DCE_config.db3 and DREEQVar.db3 via sqlite3.exe. Shows WAS/NOW for each changed key.
+- [x] **Storage map** — `docs/equitrac-storage-map.md` documents where every confirmed setting lives.
+- [x] **Project structure** — CLAUDE.md, ARCHITECTURE.md, TASKS.md, docs/, tools/, launchers (.bat), .gitignore all updated.
+
+### Pending
+
+- [ ] **Deploy Export-EquitracConfig.ps1 to server** — scp and test run, verify output file is complete.
+- [ ] **Add `cas||workflowfolderslastupdatetime` to noise filter** — this background sync timestamp shows up as a false positive in SQLite EQVar diff. Add to a `$EQVarNoiseKeys` set in EQ-Diff.ps1.
+- [ ] **Continue UI change mapping** — areas not yet tested: device registration, license seat changes, user card enrolment, report config, FlexNet license changes. Run BEFORE/AFTER for each.
+- [ ] **Export-EquitracConfig.ps1: improve pricing display** — cat_pricelist XML parsing works but rate labels (BW/color) aren't yet labeled by page type. Investigate XML structure further.
+- [ ] **Export-EquitracConfig.ps1: known column names** — BCP dumps show pipe-delimited data but column names are unknown (eqcas quirk). Once confirmed, add column labels to the output.
+- [ ] **Integrate into Export-ServerInfo.ps1** — add a ControlSuite section that calls the EQ export logic when ControlSuite is detected on the server.
+
+---
+
+---
+
 ## Completed
 
 - [x] **Per-queue: Use Application Color** — reads `psk:PageColorManagement` from default PrintTicket XML. Maps to FujiFilm "Use the dmColor specified by the application" toggle. `psk:None` = On (pass-through), `psk:System/Driver/Device` = Off.

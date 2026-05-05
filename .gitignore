@@ -4,3 +4,10 @@ logs/
 *.log
 ServerInfo_*.txt
 ExportLog_*.txt
+EquitracConfig_*.txt
+TraceLog_*.txt
+# EQ tool temp dirs (created on server, not tracked locally)
+EQ_BcpDump/
+EQ_DbQuery/
+EQ_ConfigExport/
+EQ_Snapshots/
