@@ -65,19 +65,20 @@ $WatchedKeys = @(
     @{ Key='cas||sendemailnotif';               Label='Send Email Notifications';     Section='smtp';     IsXml=$false },
     @{ Key='cas||defaultfromaddress';           Label='Default From Address';         Section='smtp';     IsXml=$false },
     # Job Management
-    @{ Key='cas||jobexpirytime';                Label='Job Expiry Time (minutes)';    Section='job';      IsXml=$false },
-    @{ Key='cas||distributionlistjobexpirytime';Label='Dist. List Expiry (minutes)';  Section='job';      IsXml=$false },
+    @{ Key='dre|sdr|jobexpirytime';              Label='Job Expiry Time (minutes)';    Section='job';      IsXml=$false },
+    @{ Key='dre|sdr|distributionlistjobexpirytime'; Label='Dist. List Expiry (minutes)'; Section='job';   IsXml=$false },
     @{ Key='cas||precision';                    Label='Accounting Precision';         Section='job';      IsXml=$false },
     @{ Key='dce||offlinelifetime';              Label='Offline Lifetime';             Section='job';      IsXml=$false },
     @{ Key='dce||requeuereleasedjobsonlogout';  Label='Requeue Jobs on Logout';       Section='job';      IsXml=$false },
     @{ Key='dce||releasebehaviour';             Label='Release Behaviour';            Section='job';      IsXml=$false },
     @{ Key='cas||escrowcfg';                    Label='Escrow Config';                Section='job';      IsXml=$true  },
     # Quotas and Messages
-    @{ Key='cas||colourquota';                  Label='Colour Quota Type';            Section='quota';    IsXml=$false },
+    @{ Key='cas||colourquota';                  Label='Color Quota Mode';             Section='quota';    IsXml=$false;
+       ValueMap=@{'0'='Disabled';'1'='Enabled (track only)';'2'='Enabled + block color copy on exceed';'3'='Enabled (custom message only)'} },
     @{ Key='cas||autousercolorquotalimit';       Label='Auto User Color Quota Limit';  Section='quota';    IsXml=$false },
-    @{ Key='dce||facaccesscolorcopy';           Label='Color Copy Feature Access';    Section='quota';    IsXml=$false },
-    @{ Key='cas||bcexcludeifinsufficientfunds'; Label='Block Color Copy on Insuf. Funds'; Section='quota'; IsXml=$false },
-    @{ Key='cas||accenforcelimit';              Label='Quota Enforcement';            Section='quota';    IsXml=$false },
+    @{ Key='dce||facaccesscolorcopy';           Label='Color Copy Feature Access';    Section='quota';    IsXml=$false;
+       ValueMap=@{'0'='Restricted';'1'='Unrestricted'} },
+    @{ Key='cas||accenforcelimit';              Label='Color Quota Account Hard Limit'; Section='quota';  IsXml=$false },
     @{ Key='cas||insufficientfundsmsg';         Label='Insufficient Funds Message';   Section='quota';    IsXml=$false },
     @{ Key='dre||colorquotamessage';            Label='Color Quota Message';          Section='quota';    IsXml=$false },
     # Currency and Accounting
@@ -362,26 +363,108 @@ function Collect-WindowsData {
         if ($ip) {
             $ip.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' } | ForEach-Object {
                 $iname=$_.Name; $folder=$_.Value
-                $sk    = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$folder\Setup"
-                $ed    = try{(Get-ItemProperty $sk -EA Stop).Edition}catch{''}
-                $ver2  = try{(Get-ItemProperty $sk -EA Stop).Version}catch{''}
-                $svcN  = if($iname -eq 'MSSQLSERVER'){'MSSQLSERVER'}else{"MSSQL`$$iname"}
-                $svc2  = Get-Service $svcN -EA SilentlyContinue
-                $svcSt2= if($svc2){[string]$svc2.Status}else{'Not running'}
-                $tcpKey= "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$folder\MSSQLServer\SuperSocketNetLib\Tcp"
-                $tcpEn=$false; $tcpPt=''
+                $sk  = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$folder\Setup"
+                $msk = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$folder\MSSQLServer"
+
+                $ed          = try{(Get-ItemProperty $sk -EA Stop).Edition}catch{''}
+                $ver2        = try{(Get-ItemProperty $sk -EA Stop).Version}catch{''}
+                $installPath = try{(Get-ItemProperty $sk -EA Stop).SQLPath}catch{''}
+                $dataRoot    = try{(Get-ItemProperty $sk -EA Stop).SQLDataRoot}catch{''}
+
+                $svcN    = if($iname -eq 'MSSQLSERVER'){'MSSQLSERVER'}else{"MSSQL`$$iname"}
+                $svc2    = Get-Service $svcN -EA SilentlyContinue
+                $svcSt2  = if($svc2){[string]$svc2.Status}else{'Not running'}
+                $svcAcct = try{(Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\$svcN" -EA Stop).ObjectName}catch{''}
+
+                $loginMode = try{[int](Get-ItemProperty $msk -EA Stop).LoginMode}catch{0}
+                $authMode  = switch($loginMode){1{'Windows Only'} 2{'Mixed Mode (SQL + Windows)'} default{"Unknown ($loginMode)"}}
+
+                $backupDir = try{(Get-ItemProperty $msk -EA Stop).BackupDirectory}catch{''}
+                $defData   = try{(Get-ItemProperty $msk -EA Stop).DefaultData}catch{''}
+                $defLog    = try{(Get-ItemProperty $msk -EA Stop).DefaultLog}catch{''}
+
+                $errLog = ''
+                if (Test-Path "$msk\Parameters" -EA SilentlyContinue) {
+                    (Get-ItemProperty "$msk\Parameters" -EA SilentlyContinue).PSObject.Properties |
+                        Where-Object { $_.Name -match '^SqlArg' -and $_.Value -match '^-e(.+)' } |
+                        Select-Object -First 1 | ForEach-Object { $errLog = $_.Value -replace '^-e','' }
+                }
+
+                $npKey    = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$folder\MSSQLServer\SuperSocketNetLib\Np"
+                $npEnabled = (Test-Path $npKey -EA SilentlyContinue) -and ((try{(Get-ItemProperty $npKey -EA Stop).Enabled}catch{0}) -eq 1)
+
+                $tcpKey = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$folder\MSSQLServer\SuperSocketNetLib\Tcp"
+                $tcpEn=$false; $tcpPt=''; $tcpKeepAlive=''; $tcpListenAll=''
+                $tcpIpList=[System.Collections.Generic.List[object]]::new()
                 if (Test-Path $tcpKey -EA SilentlyContinue) {
-                    $tcpEn=(try{(Get-ItemProperty $tcpKey -EA Stop).Enabled}catch{0}) -eq 1
-                    $ipAll="$tcpKey\IPAll"
-                    if (Test-Path $ipAll -EA SilentlyContinue) {
-                        $tcpPt=try{(Get-ItemProperty $ipAll -EA Stop).TcpPort}catch{''}
-                        if(-not $tcpPt){$tcpPt="dyn:$(try{(Get-ItemProperty $ipAll -EA Stop).TcpDynamicPorts}catch{''})"}
+                    $tcpP = Get-ItemProperty $tcpKey -EA SilentlyContinue
+                    $tcpEn        = ($tcpP.Enabled -eq 1)
+                    $tcpKeepAlive = "$($tcpP.KeepAlive)"
+                    $tcpListenAll = if($tcpP.ListenOnAllIPs -eq 1){'Yes'}else{'No'}
+                    $ipAllKey = "$tcpKey\IPAll"
+                    if (Test-Path $ipAllKey -EA SilentlyContinue) {
+                        $ia = Get-ItemProperty $ipAllKey -EA SilentlyContinue
+                        $tcpPt = if($ia.TcpPort){$ia.TcpPort}elseif($ia.TcpDynamicPorts){"dyn:$($ia.TcpDynamicPorts)"}else{''}
+                    }
+                    Get-ChildItem $tcpKey -EA SilentlyContinue | Where-Object { $_.PSChildName -match '^IP\d+$' } | ForEach-Object {
+                        $ipP = Get-ItemProperty $_.PSPath -EA SilentlyContinue
+                        if ($ipP -and $ipP.IpAddress) {
+                            $tcpIpList.Add([PSCustomObject]@{
+                                Name    = $_.PSChildName
+                                Active  = if($ipP.Active  -eq 1){'Yes'}else{'No'}
+                                Enabled = if($ipP.Enabled -eq 1){'Yes'}else{'No'}
+                                IP      = $ipP.IpAddress
+                                Port    = if($ipP.TcpPort){$ipP.TcpPort}elseif($ipP.TcpDynamicPorts){"dyn:$($ipP.TcpDynamicPorts)"}else{''}
+                            })
+                        }
                     }
                 }
+
+                $fsKey   = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$folder\MSSQLSERVER\Filestream"
+                $fsLevel = try{[int](Get-ItemProperty $fsKey -EA Stop).EnableLevel}catch{-1}
+                $fsDesc  = switch($fsLevel){
+                    0{'Disabled'} 1{'T-SQL access only'} 2{'T-SQL + local file system'} 3{'T-SQL + local + remote file system'} default{'Not configured'}
+                }
+
+                $sqlSrv = if($iname -eq 'MSSQLSERVER'){'.'}else{".\$iname"}
+                $sqA = @('-S',$sqlSrv,'-U',$SqlUser,'-P',$SqlPass,'-W','-s','|','-h','-1')
+
+                $maxMem=''; $minMem=''; $userInst=''
+                & sqlcmd @sqA -Q "SET NOCOUNT ON; SELECT name+'|'+CAST(value_in_use AS VARCHAR(20)) FROM sys.configurations WHERE name IN ('max server memory (MB)','min server memory (MB)','user instances enabled') ORDER BY name;" 2>$null | ForEach-Object {
+                    $t=$_.Trim()
+                    if ($t -match '\|') {
+                        $kk,$vv=$t -split '\|',2
+                        switch -Wildcard ($kk.Trim()) {
+                            'max*' { $maxMem  = "$($vv.Trim()) MB" }
+                            'min*' { $minMem  = "$($vv.Trim()) MB" }
+                            'user*'{ $userInst = if($vv.Trim() -eq '1'){'Enabled'}else{'Disabled'} }
+                        }
+                    }
+                }
+
+                $sysAdmins=[System.Collections.Generic.List[string]]::new()
+                & sqlcmd @sqA -Q "SET NOCOUNT ON; SELECT sp.name+'|'+sp.type_desc FROM sys.server_role_members srm JOIN sys.server_principals sp ON srm.member_principal_id=sp.principal_id JOIN sys.server_principals r ON srm.role_principal_id=r.principal_id WHERE r.name='sysadmin';" 2>$null | ForEach-Object {
+                    $t=$_.Trim(); if($t -and $t -match '\|'){$sysAdmins.Add($t)}
+                }
+
+                $tempdbFiles=[System.Collections.Generic.List[object]]::new()
+                & sqlcmd @sqA -Q "SET NOCOUNT ON; SELECT name+'|'+type_desc+'|'+physical_name+'|'+CAST(size*8/1024 AS VARCHAR)+'|'+CASE WHEN is_percent_growth=1 THEN CAST(growth AS VARCHAR)+'%' ELSE CAST(growth*8/1024 AS VARCHAR)+' MB' END FROM sys.master_files WHERE database_id=2;" 2>$null | ForEach-Object {
+                    $t=$_.Trim()
+                    if ($t -and $t -match '\|') {
+                        $p=$t -split '\|',5
+                        if($p.Count -ge 5){$tempdbFiles.Add([PSCustomObject]@{Name=$p[0];Type=$p[1];Path=$p[2];SizeMB=$p[3];Growth=$p[4]})}
+                    }
+                }
+
                 $sqlInsts.Add([PSCustomObject]@{
-                    Name      = if($iname -eq 'MSSQLSERVER'){'Default (MSSQLSERVER)'}else{$iname}
-                    Edition   = $ed; Version=$ver2; Status=$svcSt2
-                    TcpEnabled= $tcpEn; TcpPort=$tcpPt
+                    Name=if($iname -eq 'MSSQLSERVER'){'Default (MSSQLSERVER)'}else{$iname}
+                    Edition=$ed; Version=$ver2; Status=$svcSt2; ServiceAcct=$svcAcct; AuthMode=$authMode
+                    InstallPath=$installPath; DataRoot=$dataRoot; DefaultData=$defData; DefaultLog=$defLog
+                    BackupDir=$backupDir; ErrorLog=$errLog; NpEnabled=$npEnabled
+                    TcpEnabled=$tcpEn; TcpPort=$tcpPt; TcpKeepAlive=$tcpKeepAlive; TcpListenAll=$tcpListenAll
+                    TcpIpAddrs=$tcpIpList; FsDesc=$fsDesc
+                    MaxMemoryMB=$maxMem; MinMemoryMB=$minMem; UserInstances=$userInst
+                    SysAdmins=$sysAdmins; TempDbFiles=$tempdbFiles
                 })
             }
         }
@@ -743,10 +826,41 @@ function Write-FullTxt {
         else {
             foreach ($si in $w2.SqlInstances) {
                 WS "Instance: $($si.Name)"
-                WF '  Edition'  $si.Edition
-                WF '  Version'  $si.Version
-                WF '  Status'   $si.Status
-                WF '  TCP'      "$(if($si.TcpEnabled){'Enabled'}else{'Disabled'})  Port=$($si.TcpPort)"
+                WF '  Edition'          $si.Edition
+                WF '  Version'          $si.Version
+                WF '  Service'          $si.Status
+                WF '  Service Account'  $si.ServiceAcct
+                WF '  Auth Mode'        $si.AuthMode
+                WF '  Install Path'     $si.InstallPath
+                WF '  Data Root'        $si.DataRoot
+                WF '  Default Data Dir' $si.DefaultData
+                WF '  Default Log Dir'  $si.DefaultLog
+                WF '  Backup Dir'       $si.BackupDir
+                WF '  Error Log'        $si.ErrorLog
+                WF '  Named Pipes'      "$(if($si.NpEnabled){'Enabled'}else{'Disabled'})"
+                WF '  TCP/IP'           "$(if($si.TcpEnabled){'Enabled'}else{'Disabled'})  Port=$($si.TcpPort)"
+                WF '  TCP Keep Alive'   $si.TcpKeepAlive
+                WF '  TCP Listen All'   $si.TcpListenAll
+                if ($si.TcpIpAddrs.Count -gt 0) {
+                    W '  TCP IP Addresses:'
+                    foreach ($ip in $si.TcpIpAddrs) {
+                        W "    $($ip.Name) [$($ip.IP)]: Active=$($ip.Active) Enabled=$($ip.Enabled) Port=$($ip.Port)"
+                    }
+                }
+                WF '  FILESTREAM'       $si.FsDesc
+                WF '  Max Memory'       $si.MaxMemoryMB
+                WF '  Min Memory'       $si.MinMemoryMB
+                WF '  User Instances'   $si.UserInstances
+                if ($si.SysAdmins.Count -gt 0) {
+                    W '  Sysadmin Members:'
+                    foreach ($a in $si.SysAdmins) { W "    $a" }
+                }
+                if ($si.TempDbFiles.Count -gt 0) {
+                    W '  TempDB Files:'
+                    foreach ($tf in $si.TempDbFiles) {
+                        W "    [$($tf.Type)] $($tf.Name): $($tf.Path)  Size=$($tf.SizeMB) MB  Growth=$($tf.Growth)"
+                    }
+                }
             }
         }
 
@@ -806,7 +920,9 @@ function Write-FullTxt {
     foreach ($sec in $SectionMeta.Keys) {
         WH $SectionMeta[$sec].ToUpper()
         foreach ($wk in ($WatchedKeys | Where-Object { $_.Section -eq $sec })) {
-            WF $wk.Label (FV $data.KeyValues[$wk.Key] 300)
+            $raw = FV $data.KeyValues[$wk.Key] 300
+            $disp = if ($wk.ValueMap -and $wk.ValueMap.ContainsKey($raw)) { "$raw ($($wk.ValueMap[$raw]))" } else { $raw }
+            WF $wk.Label $disp
         }
     }
 
@@ -1114,13 +1230,50 @@ function Write-HtmlReport {
             foreach ($si in $wd.SqlInstances) {
                 $sr=[System.Collections.Generic.List[object]]::new()
                 @(
-                    @{K='Edition';     V=$si.Edition},
-                    @{K='Version';     V=$si.Version},
-                    @{K='Service';     V=$si.Status},
-                    @{K='TCP/IP';      V=if($si.TcpEnabled){'Enabled'}else{'Disabled'}},
-                    @{K='Port';        V=$si.TcpPort}
+                    @{K='Edition';           V=$si.Edition},
+                    @{K='Version';           V=$si.Version},
+                    @{K='Service';           V=$si.Status},
+                    @{K='Service Account';   V=$si.ServiceAcct},
+                    @{K='Auth Mode';         V=$si.AuthMode},
+                    @{K='Install Path';      V=$si.InstallPath},
+                    @{K='Data Root';         V=$si.DataRoot},
+                    @{K='Default Data Dir';  V=$si.DefaultData},
+                    @{K='Default Log Dir';   V=$si.DefaultLog},
+                    @{K='Backup Dir';        V=$si.BackupDir},
+                    @{K='Error Log';         V=$si.ErrorLog},
+                    @{K='Named Pipes';       V=if($si.NpEnabled){'Enabled'}else{'Disabled'}},
+                    @{K='TCP/IP';            V=if($si.TcpEnabled){'Enabled'}else{'Disabled'}},
+                    @{K='TCP Port (IPAll)';  V=$si.TcpPort},
+                    @{K='TCP Keep Alive';    V=$si.TcpKeepAlive},
+                    @{K='TCP Listen All';    V=$si.TcpListenAll},
+                    @{K='FILESTREAM';        V=$si.FsDesc},
+                    @{K='Max Server Memory'; V=$si.MaxMemoryMB},
+                    @{K='Min Server Memory'; V=$si.MinMemoryMB},
+                    @{K='User Instances';    V=$si.UserInstances}
                 ) | ForEach-Object { $sr.Add([PSCustomObject]@{K=$_.K;V=(FV $_.V)}) }
-                $sqlBody += "<div class='sub'>Instance: $(HE $si.Name)</div>" + (New-KVTable $sr)
+                $sqlBody += "<div class='inst-hdr'>&#9670; Instance: $(HE $si.Name)</div>" + (New-KVTable $sr)
+                if ($si.TcpIpAddrs.Count -gt 0) {
+                    $ipr=[System.Collections.Generic.List[object]]::new()
+                    foreach ($ip in $si.TcpIpAddrs) {
+                        $ipr.Add([PSCustomObject]@{K="$($ip.Name) ($($ip.IP))"; V="Active=$($ip.Active)  Enabled=$($ip.Enabled)  Port=$(if($ip.Port){$ip.Port}else{'(none)'})"})
+                    }
+                    $sqlBody += "<div class='sub' style='margin-top:6px'>TCP/IP Addresses</div>" + (New-KVTable $ipr)
+                }
+                if ($si.SysAdmins.Count -gt 0) {
+                    $ar=[System.Collections.Generic.List[object]]::new()
+                    foreach ($a in $si.SysAdmins) {
+                        $p=$a -split '\|',2
+                        $ar.Add([PSCustomObject]@{K=$p[0];V=if($p.Count -gt 1){$p[1]}else{''}})
+                    }
+                    $sqlBody += "<div class='sub' style='margin-top:6px'>Sysadmin Members</div>" + (New-KVTable $ar)
+                }
+                if ($si.TempDbFiles.Count -gt 0) {
+                    $tr=[System.Collections.Generic.List[object]]::new()
+                    foreach ($tf in $si.TempDbFiles) {
+                        $tr.Add([PSCustomObject]@{K="[$($tf.Type)] $($tf.Name)"; V="$($tf.Path)  |  Size: $($tf.SizeMB) MB  |  Growth: $($tf.Growth)"})
+                    }
+                    $sqlBody += "<div class='sub' style='margin-top:6px'>TempDB Files</div>" + (New-KVTable $tr)
+                }
             }
         }
         $winHtml += New-HtmlSection 'win-sql' 'SQL Server' $sqlBody
@@ -1191,7 +1344,8 @@ function Write-HtmlReport {
     foreach ($sec in $SectionMeta.Keys) {
         $rows = [System.Collections.Generic.List[object]]::new()
         foreach ($wk in ($WatchedKeys | Where-Object { $_.Section -eq $sec })) {
-            $v = FV $data.KeyValues[$wk.Key] 300
+            $raw = FV $data.KeyValues[$wk.Key] 300
+            $v = if ($wk.ValueMap -and $wk.ValueMap.ContainsKey($raw)) { "$raw ($($wk.ValueMap[$raw]))" } else { $raw }
             $rows.Add([PSCustomObject]@{ K=$wk.Label; V=$v })
         }
         $keyHtml += New-HtmlSection $sec $SectionMeta[$sec] (New-KVTable $rows)
@@ -1306,6 +1460,7 @@ table.kv .k{color:#555;width:240px;min-width:180px;font-weight:500;word-break:no
 table.kv .v{color:#111}
 table.kv .v.e{color:#bbb;font-style:italic}
 .sub{margin-top:10px;margin-bottom:5px;font-size:11px;font-weight:bold;color:#666;text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid #eee;padding-bottom:3px}
+.inst-hdr{margin-top:14px;margin-bottom:6px;padding:7px 12px;background:#1a2744;color:#fff;border-radius:5px;font-size:12px;font-weight:bold;letter-spacing:.4px}
 pre#rawpre{background:#1e1e1e;color:#d4d4d4;padding:14px;border-radius:6px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all}
 mark{background:#ffd600;color:#000;border-radius:2px}
 .hi{display:none!important}
@@ -1343,12 +1498,27 @@ function markText(node,q){
   else if(node.nodeType===1&&!/^(SCRIPT|STYLE|PRE)$/.test(node.nodeName)){ Array.from(node.childNodes).forEach(function(c){markText(c,q);}); }
 }
 var mainEl=document.getElementById('main');
+function secTop(el){
+  // offset of el's top edge relative to #main's scrollable content
+  return el.getBoundingClientRect().top - mainEl.getBoundingClientRect().top + mainEl.scrollTop;
+}
+document.querySelectorAll('#nav a[href^="#"]').forEach(function(a){
+  a.addEventListener('click',function(e){
+    e.preventDefault();
+    var target=document.getElementById(this.getAttribute('href').slice(1));
+    if(!target) return;
+    mainEl.scrollTop=secTop(target);
+    document.querySelectorAll('#nav a').forEach(function(x){x.classList.remove('act');});
+    this.classList.add('act');
+  });
+});
 mainEl.addEventListener('scroll',function(){
-  var top=mainEl.scrollTop+50;
+  var top=mainEl.scrollTop+60;
   document.querySelectorAll('.sec').forEach(function(s){
     var a=document.querySelector('#nav a[href="#'+s.id+'"]');
     if(!a) return;
-    a.classList.toggle('act', top>=s.offsetTop && top<s.offsetTop+s.offsetHeight);
+    var st=secTop(s);
+    a.classList.toggle('act', top>=st && top<st+s.offsetHeight);
   });
 });
 '@
