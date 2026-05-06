@@ -2,40 +2,18 @@
 
 ---
 
-## CURRENT CHECKPOINT — 2026-05-06 (Session 9)
-
-### Objective
-Fix HTML report summary cards showing blank values after merging `Export-ServerInfo.ps1` Windows data collection into `AsInstalledScanner.ps1`.
+## CURRENT CHECKPOINT — 2026-05-06 (Session 10)
 
 ### Completed
-- Merged `Collect-WindowsData` function (~230 lines) into `AsInstalledScanner.ps1` — all 4 modes now collect Windows server info (system, OS, hardware, network, roles, SQL, print queues)
-- Fixed `$null = Write-HtmlReport` (output stream leak corrupting `$afterDir` in Run-Full)
-- Fixed EQVar TSV newline bug (multi-line XML broke Compare mode false positives)
-- HTML report: Windows sections added (sidebar nav, 10 new sections), formatted content confirmed correct
-- Summary cards: removed outer `<div class='sgrid'>` wrapper (was nesting grids, causing blank display)
-- Summary cards: replaced `Where-Object` hashtable pipeline with direct string-concat card build
-- EQ cards confirmed working (show correct counts); Windows cards still showing empty values
-
-### Current
-Windows card values (Platform, OS, RAM, Print Queues) are empty in the HTML summary even though:
-- `Write-FullTxt` correctly outputs Platform, OS, RAM from `$data.WinData`
-- HTML body sections (System Identity etc.) correctly display all Windows data
-- EQ cards display correct counts
-- Root cause not yet confirmed — suspected `Collect-WindowsData` output stream leak making `$winData` an array, so `$wd.Platform` via member enumeration returns wrong type to `HE`
-
-### Next Step
-SSH back into CSTEMP (was offline — connection timed out) and run diagnostic:
-```powershell
-ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -Command \". 'C:\Temp\AsInstalledScanner\tools\AsInstalledScanner.ps1'; \$d = Collect-Data; Write-Host ('WinData type: ' + \$d.WinData.GetType().FullName); Write-Host ('Count: ' + @(\$d.WinData).Count); Write-Host ('Platform: ' + \$d.WinData.Platform)\""
-```
-If `$winData` is an array → suppress pipeline leaks in `Collect-WindowsData` with `$null = ...` or `| Out-Null`.
-Then redeploy, regenerate, verify cards show values.
+- **Fixed Windows summary cards** — root cause: `HE (if ($wd) {...})` pattern fails because `if` is
+  treated as a command name when PowerShell evaluates the expression in certain contexts (e.g. SSH).
+  Fix: replaced with inline `$(HE $data.WinData.Platform)` subexpression pattern matching EQ cards.
+  Verified on CSTEMP: Platform=Virtual Machine, OS=Microsoft WS 2022 Standard Evaluation, RAM=8 GB, Queues=5.
 
 ### Pending
-- Fix Windows summary card empty values (root cause: confirm & fix)
-- Commit + push fix to `skyconasia-ux/AsInstalledScannerUtility`
-- Add `cas||workflowfolderslastupdatetime` to `$EQVarNoise` (false-positive suppression)
+- Add `cas||workflowfolderslastupdatetime` to `$EQVarNoise` (false-positive suppression in Compare mode)
 - Continue UI change mapping: device registration, license seats, user card enrolment, report config
+- Push to `skyconasia-ux/AsInstalledScannerUtility`
 
 ---
 
