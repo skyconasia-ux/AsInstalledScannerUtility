@@ -49,6 +49,8 @@ $WatchedKeys = @(
     # Authentication — External Auth
     @{ Key='cas||authequitracwcws';                  Label='Windows Auth Enabled';              Section='auth'; IsXml=$false;
        ValueMap=@{'0'='Disabled';'1'='Enabled'} },
+    @{ Key='cas||useraccautosync';                   Label='LDAP Sync User Attrs on Login';     Section='auth'; IsXml=$false;
+       ValueMap=@{'0'='Disabled';'1'='Enabled'} },
     @{ Key='cas||clientauthconfig';                  Label='Auth Method Config (raw XML)';      Section='auth'; IsXml=$true  },
     @{ Key='ads||settingsdoc';                       Label='AD Sync Settings (raw XML)';        Section='auth'; IsXml=$true  },
     # Authentication — Device Clients
@@ -770,12 +772,15 @@ function Collect-Data {
     }
     $authData['SecurityPolicySids'] = $resolvedSids
 
-    # Parse clientauthconfig XML — domain list and auth method flags
+    # Parse clientauthconfig XML — domains, LDAP servers, auth method flags
+    # type=0 items = Windows domains; type=2 items = LDAP servers
     $cacXml = EV 'cas||clientauthconfig'
     $authData['AuthEquitracPINS']         = ''
     $authData['AuthExternalUserIDPassword'] = ''
     $authData['AuthExternalPassword']     = ''
     $authData['Domains']                  = [System.Collections.Generic.List[string]]::new()
+    $authData['LdapServers']              = [System.Collections.Generic.List[object]]::new()
+    $authData['UserAccAutoSync']          = EV 'cas||useraccautosync'
     if ($cacXml) {
         try {
             $xdoc = [xml]$cacXml
@@ -783,12 +788,29 @@ function Collect-Data {
             $authData['AuthEquitracPINS']           = if ($root.EquitracPINS)           { $root.EquitracPINS }           else { '' }
             $authData['AuthExternalUserIDPassword'] = if ($root.ExternalUserIDPassword) { $root.ExternalUserIDPassword } else { '' }
             $authData['AuthExternalPassword']       = if ($root.ExternalPassword)       { $root.ExternalPassword }       else { '' }
-            # Domain entries are <item0>, <item1>, ... with <type>0</type> and <default>domainname</default>
+            $ldapTypeMap  = @{'0'='First try AD-style, then try simple';'1'='Try AD-style only';'2'='Try simple only'}
+            $ldapUidMap   = @{'0'='Do not change';'1'='Remove email domain'}
             $i = 0
             while ($true) {
                 $item = $root.SelectSingleNode("item$i")
                 if (-not $item) { break }
-                if ($item.type -eq '0') { $authData['Domains'].Add($item.default) }
+                if ($item.type -eq '0') {
+                    $authData['Domains'].Add($item.default)
+                } elseif ($item.type -eq '2') {
+                    $sm  = if ($item.submethod)   { $item.submethod }   else { '' }
+                    $uid = if ($item.useridmod)   { $item.useridmod }   else { '' }
+                    $authData['LdapServers'].Add([PSCustomObject]@{
+                        Server    = if ($item.server)      { $item.server }      else { '' }
+                        Port      = if ($item.port)        { $item.port }        else { '' }
+                        LdapType  = if ($ldapTypeMap.ContainsKey($sm))  { $ldapTypeMap[$sm] }  else { $sm }
+                        ForceSSL  = if ($item.forcessl -eq '-1') { 'Enabled' } else { 'Disabled' }
+                        LdapV3    = if ($item.versiontouse -eq '3') { 'Enabled' } else { 'Disabled' }
+                        DirectBind= if ($item.dnprefix -or $item.dnsuffix) { 'true' } else { 'false' }
+                        DnPrefix  = if ($item.dnprefix)    { $item.dnprefix }    else { '' }
+                        DnSuffix  = if ($item.dnsuffix)    { $item.dnsuffix }    else { '' }
+                        UserIdMod = if ($ldapUidMap.ContainsKey($uid))  { $ldapUidMap[$uid] }  else { $uid }
+                    })
+                }
                 $i++
             }
         } catch { }
@@ -1214,15 +1236,43 @@ function Build-AuthHtml {
 
     # --- External Authentication ---
     $html += AG 'External Authentication'
-    $extRows = ''
-    $extRows += ARow 'Windows Auth (WCWS)' (AVMap $kv['cas||authequitracwcws'] @{'0'='Disabled';'1'='Enabled'})
-    # Parse domains from authData
+
+    # Windows Authentication
+    $html += "<div class='sub'>Windows Authentication</div>"
+    $winRows = ''
+    $winRows += ARow 'Enable Windows Authentication' (AVMap $kv['cas||authequitracwcws'] @{'0'='Disabled';'1'='Enabled'})
     if ($ad -and $ad['Domains'] -and $ad['Domains'].Count -gt 0) {
         $j = 1
-        foreach ($d in $ad['Domains']) { $extRows += ARow "Domain $j" $d; $j++ }
-    } else { $extRows += ARow 'Domains' '(not set)' }
-    $extRows += ARow 'AD Sync Settings' (FV $kv['ads||settingsdoc'] 80)
-    $html += ATable $extRows
+        foreach ($d in $ad['Domains']) { $winRows += ARow "Domain $j" $d; $j++ }
+    } else { $winRows += ARow 'Domains' '(not set)' }
+    $html += ATable $winRows
+
+    # LDAP Authentication
+    $html += "<div class='sub'>LDAP Authentication</div>"
+    $ldapEnabled = if ($ad -and $ad['LdapServers'] -and $ad['LdapServers'].Count -gt 0) { 'Enabled' } else { 'Disabled' }
+    $syncVal = if ($ad -and $ad['UserAccAutoSync']) { $ad['UserAccAutoSync'] } else { $kv['cas||useraccautosync'] }
+    $ldapTopRows = ''
+    $ldapTopRows += ARow 'Enable LDAP Authentication' $ldapEnabled
+    $ldapTopRows += ARow 'Synchronize user attributes on login' (AVMap $syncVal @{'0'='Disabled';'1'='Enabled'})
+    $html += ATable $ldapTopRows
+
+    if ($ad -and $ad['LdapServers'] -and $ad['LdapServers'].Count -gt 0) {
+        $html += "<div class='sub' style='margin-top:8px'>LDAP Server Configuration</div>"
+        foreach ($srv in $ad['LdapServers']) {
+            $html += "<table class='kv' style='margin-bottom:8px'>"
+            $html += "<tr><td class='k'>Server Name</td><td class='v'>$(HE $srv.Server)</td></tr>"
+            $html += "<tr><td class='k'>Port</td><td class='v'>$(HE $srv.Port)</td></tr>"
+            $html += "<tr><td class='k'>Type</td><td class='v'>$(HE $srv.LdapType)</td></tr>"
+            $html += "<tr><td class='k'>Force SSL</td><td class='v'>$(HE $srv.ForceSSL)</td></tr>"
+            $html += "<tr><td class='k'>Use LDAP version 3</td><td class='v'>$(HE $srv.LdapV3)</td></tr>"
+            $html += "<tr><td class='k'>Authentication Method</td><td class='v'>Direct bind</td></tr>"
+            $html += "<tr><td class='k'>Direct bind</td><td class='v'>$(HE $srv.DirectBind)</td></tr>"
+            $html += "<tr><td class='k'>DN Prefix</td><td class='v'>$(HE $srv.DnPrefix)</td></tr>"
+            $html += "<tr><td class='k'>DN Suffix</td><td class='v'>$(HE $srv.DnSuffix)</td></tr>"
+            $html += "<tr><td class='k'>User ID Modification</td><td class='v'>$(HE $srv.UserIdMod)</td></tr>"
+            $html += "</table>"
+        }
+    }
 
     # --- Device Clients ---
     $html += AG 'Device Clients'
