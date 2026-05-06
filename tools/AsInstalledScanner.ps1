@@ -1214,12 +1214,20 @@ function Build-AuthHtml {
     $kv = $data.KeyValues
     $html = ''
 
-    function AG { param([string]$t) "<div class='auth-grp'>$t</div>" }
-    function ARow { param([string]$k,[string]$v)
+    function AG     { param([string]$t) "<div class='auth-grp'>$t</div>" }
+    function ARow   { param([string]$k,[string]$v)
         $ec = if ($v -eq '(not set)') { ' e' } else { '' }
         "<tr><td class='k'>$(HE $k)</td><td class='v$ec'>$(HE $v)</td></tr>"
     }
+    function ARowH  { param([string]$k,[string]$v) "<tr><td class='k'>$(HE $k)</td><td class='v'>$v</td></tr>" }
+    function ARS1   { param([string]$k,[string]$v) "<tr><td class='k sub1'>$(HE $k)</td><td class='v'>$v</td></tr>" }
+    function ARS2   { param([string]$k,[string]$v) "<tr><td class='k sub2'>$(HE $k)</td><td class='v'>$v</td></tr>" }
+    function SecLbl { param([string]$t) "<tr><td colspan='2' class='sec-lbl'>$(HE $t)</td></tr>" }
     function ATable { param([string]$body) "<table class='kv'>$body</table>" }
+    function DCOn   { param([string]$v) if ($v -eq '1') { "<span class='dc-on'>On</span>" } else { "<span class='dc-off'>Off</span>" } }
+    function DCEnI  { param([string]$v) if ($v -eq '0') { "<span class='dc-on'>Enabled</span>" } else { "<span class='dc-off'>Disabled</span>" } }
+    function YNo    { param([string]$v) if ($v -eq '1') { "<span class='eq-on'>&#9745; Yes</span>" } else { "<span class='eq-off'>&#9744; No</span>" } }
+    function CBx    { param([string]$v,[string]$t='Y') $on=$v-eq$t-or$v-eq'1'; if($on){"<span class='eq-on'>&#9745; Checked</span>"}else{"<span class='eq-off'>&#9744; Unchecked</span>"} }
     function AVMap { param([string]$raw,[hashtable]$map)
         $r = FV $raw 300
         if ($map -and $map.ContainsKey($raw)) { return "$raw ($($map[$raw]))" }
@@ -1281,38 +1289,55 @@ function Build-AuthHtml {
     }
 
     # --- Device Clients ---
+    # --- Device Clients ---
     $html += AG 'Device Clients'
-    $dcRows = ''
-    $dcRows += ARow 'Allow Card Swipe Login'       (AVMap $kv['dce||enableswipe']             @{'0'='Off';'1'='On'})
-    $dcRows += ARow 'Req. Extra Auth with Swipe'   (AVMap $kv['dce||nosecondaryidwithswipe']  @{'0'='Enabled';'1'='Disabled'})
-    $dcRows += ARow 'Allow Keyboard Login'          (AVMap $kv['dce||registerpin']             @{'0'='Off';'1'='On'})
-    $dcRows += ARow 'Req. Password if PIN2 Avail.'  (AVMap $kv['dce||requirepasswordifavailablekeyboard'] @{'0'='No';'1'='Yes'})
-    $dcRows += ARow 'Deny Login with Empty Password'(AVMap $kv['dce||denypromptemptypassword'] @{'0'='No';'1'='Yes'})
-    $dcRows += ARow 'Default Function at Device'    (FV $kv['dce||defaultfunction'] 100)
-    $html += ATable $dcRows
+    $swipeOn  = $kv['dce||enableswipe']
+    $reqExtra = $kv['dce||nosecondaryidwithswipe']   # 0=Enabled (inverted key)
+    $reqPin2  = $kv['dce||requirepasswordifavailablekeyboard']
+    $kbOn     = $kv['dce||registerpin']
+    $dcHtml   = "<table class='kv'>"
+    # A. Card swipe block
+    $dcHtml  += ARowH 'Allow card swipe login'  (DCOn $swipeOn)
+    $dcHtml  += ARS1  'Require additional authentication with Equitrac password'  (DCEnI $reqExtra)
+    if ($reqExtra -eq '0') {
+        $dcHtml += ARS2 'Require password only if PIN2 available (legacy devices only)' (YNo $reqPin2)
+    }
+    # Separator between card swipe and keyboard blocks
+    $dcHtml  += "<tr><td colspan='2' style='height:6px;border:none;background:none'></td></tr>"
+    # B. Keyboard block
+    $dcHtml  += ARowH 'Allow keyboard login'  (DCOn $kbOn)
+    # Keyboard Equitrac auth mode — locked to "with password prompt" when card swipe secondary auth is enabled
+    $kbMode   = if ($reqExtra -eq '0') { 'Enabled with password prompt' } else { 'Enabled without password prompt' }
+    $dcHtml  += ARS1 'Equitrac authentication'  $kbMode
+    $dcHtml  += ARS2 'Require password only if PIN2 available (legacy devices only)'  (YNo $reqPin2)
+    $dcHtml  += ARS2 'Deny login with empty password'  (YNo $kv['dce||denypromptemptypassword'])
+    # Default function (bottom of Device Clients in UI)
+    $dcHtml  += "<tr><td colspan='2' style='height:6px;border:none;background:none'></td></tr>"
+    $dcHtml  += ARow 'Default function at device'  (FV $kv['dce||defaultfunction'] 100)
+    $dcHtml  += '</table>'
+    $html    += $dcHtml
 
-    # --- Workstation / Web Client ---
-    $html += AG 'Workstation / Web Client'
-    $wcRows = ''
-    $wcRows += ARow 'PIN1 in PC Manager' (FV $kv['cas||caspin1pcmanager'] 100)
-    $wcRows += ARow 'PIN2 in PC Manager' (FV $kv['cas||caspin2pcmanager'] 100)
-    # Auth methods from clientauthconfig
-    $vPins  = if ($ad -and $ad['AuthEquitracPINS'])           { $ad['AuthEquitracPINS'] }           else { '(not set)' }
-    $vExtUP = if ($ad -and $ad['AuthExternalUserIDPassword']) { $ad['AuthExternalUserIDPassword'] } else { '(not set)' }
-    $vExtP  = if ($ad -and $ad['AuthExternalPassword'])       { $ad['AuthExternalPassword'] }       else { '(not set)' }
-    $wcRows += ARow 'Equitrac PINs Auth'         $vPins
-    $wcRows += ARow 'External User+Password Auth' $vExtUP
-    $wcRows += ARow 'External Password Auth'      $vExtP
-    $html += ATable $wcRows
+    # --- Equitrac Authentication ---
+    $html += AG 'Equitrac Authentication'
+    $vPins  = if ($ad -and $ad['AuthEquitracPINS'])           { $ad['AuthEquitracPINS'] }           else { '' }
+    $vExtUP = if ($ad -and $ad['AuthExternalUserIDPassword']) { $ad['AuthExternalUserIDPassword'] } else { '' }
+    $vExtP  = if ($ad -and $ad['AuthExternalPassword'])       { $ad['AuthExternalPassword'] }       else { '' }
+    $eqRows  = ARowH 'Equitrac primary or alternate PIN with secondary PIN'      (CBx $vPins)
+    $eqRows += ARowH 'External username and password'                             (CBx $vExtUP)
+    $eqRows += ARowH 'Equitrac primary or alternate PIN with external password'   (CBx $vExtP)
+    $html   += ATable $eqRows
 
     # --- Card Registration ---
     $html += AG 'Card Registration'
-    $crRows = ''
-    $crRows += ARow 'Card Reg: Equitrac Auth'     (AVMap $kv['dce||authequitraccardreg']         @{'0'='Off';'1'='On'})
-    $crRows += ARow 'Card Reg: Identity Provider' (AVMap $kv['dce||authidentityprovidercardreg'] @{'0'='Off';'1'='On'})
-    $crRows += ARow 'Card Storage Mode'           (AVMap $kv['dce||registerpinasalternate']      @{'0'='Store as Primary PIN';'1'='Store as Alternate PIN'})
-    $crRows += ARow 'Dual Card Reader Mode'       (AVMap $kv['dce||registertwocards']            @{'0'='Disabled';'1'='Enabled'})
-    $html += ATable $crRows
+    $crHtml  = "<table class='kv'>"
+    $crHtml += SecLbl 'Registration login'
+    $crHtml += ARS1 'Equitrac authentication'  (DCOn $kv['dce||authequitraccardreg'])
+    $crHtml += ARS1 'Identity provider'        (DCOn $kv['dce||authidentityprovidercardreg'])
+    $crHtml += "<tr><td colspan='2' style='height:6px;border:none;background:none'></td></tr>"
+    $crHtml += ARow 'Card number storage'  (AVMap $kv['dce||registerpinasalternate'] @{'0'='Store as primary PIN';'1'='Store as alternate PIN'})
+    $crHtml += ARow 'Dual card reader mode'  (AVMap $kv['dce||registertwocards'] @{'0'='Disabled';'1'='Enabled'})
+    $crHtml += '</table>'
+    $html   += $crHtml
 
     # --- Encryption ---
     $html += AG 'Encryption'
@@ -1782,6 +1807,13 @@ table.hid-tbl{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:6
 table.hid-tbl th{background:#f0f4f8;color:#555;font-size:10px;text-transform:uppercase;letter-spacing:.3px;padding:5px 10px;border:1px solid #e0e4ea;text-align:left;font-weight:600}
 table.hid-tbl td{padding:5px 10px;border:1px solid #e0e4ea;color:#111;vertical-align:top}
 table.hid-tbl tr:nth-child(even) td{background:#fafbfc}
+table.kv td.sub1{padding-left:28px;background:#f9fbff;color:#444;border-left:3px solid #c8d8f4}
+table.kv td.sub2{padding-left:48px;background:#fcfcff;color:#555;border-left:3px solid #e4eaf8;font-style:italic}
+table.kv td.sec-lbl{font-size:10px;font-weight:700;color:#3a4a6a;text-transform:uppercase;letter-spacing:.4px;padding:10px 8px 4px;border:none;background:#eef3fb;border-bottom:1px solid #d4dff0}
+.dc-on{color:#1a6d1a;font-weight:600}
+.dc-off{color:#888}
+.eq-on{color:#1a6d1a}
+.eq-off{color:#9ea5b0}
 pre#rawpre{background:#1e1e1e;color:#d4d4d4;padding:14px;border-radius:6px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all}
 mark{background:#ffd600;color:#000;border-radius:2px}
 .hi{display:none!important}
