@@ -987,28 +987,24 @@ function Write-HtmlReport {
     # --- Summary cards ---
     $smtp = if ($data.SmtpServer) { "$($data.SmtpServer):$($data.SmtpPort)" } else { 'Not set' }
     $wd   = $data.WinData
-    $cards = @(
-        # Windows server cards
-        @{L='Platform';     V=(HE (if($wd){$wd.Platform}else{''}));      G='win'},
-        @{L='OS';           V=(HE (if($wd){$wd.OsName -replace 'Windows Server ','WS '}else{''})); G='win'},
-        @{L='RAM';          V=(HE (if($wd){$wd.Ram}else{''}));           G='win'},
-        @{L='Print Queues'; V=(HE (if($wd){"$($wd.PrintQueues.Count)"}else{''})); G='win'},
-        # EQ / ControlSuite cards
-        @{L='Components';   V="$($data.Components.Count)";              G='eq'},
-        @{L='Price Lists';  V="$($data.PriceLists.Count)";              G='eq'},
-        @{L='Workflows';    V="$($data.Workflows.Count)";               G='eq'},
-        @{L='Pull Groups';  V="$($data.PullGroups.Count)";              G='eq'},
-        @{L='Users';        V="$($data.Users.Count)";                   G='eq'},
-        @{L='SMTP';         V=(HE $smtp);                               G='eq'},
-        @{L='Currency';     V=(HE $data.Currency);                      G='eq'},
-        @{L='License Host'; V=(HE $data.LicenseHost);                   G='eq'}
-    )
-    $winCards = ($cards | Where-Object { $_.G -eq 'win' } | ForEach-Object {
-        "<div class='scard sc-win'><div class='lbl'>$($_.L)</div><div class='val'>$($_.V)</div></div>"
-    }) -join ''
-    $eqCards  = ($cards | Where-Object { $_.G -eq 'eq'  } | ForEach-Object {
-        "<div class='scard sc-eq'><div class='lbl'>$($_.L)</div><div class='val'>$($_.V)</div></div>"
-    }) -join ''
+    # Build win cards directly (avoid Where-Object hashtable pipeline quirks)
+    $winPlatform   = HE (if ($wd) { $wd.Platform }   else { '' })
+    $winOs         = HE (if ($wd) { $wd.OsName -replace 'Windows Server ','WS ' } else { '' })
+    $winRam        = HE (if ($wd) { $wd.Ram }         else { '' })
+    $winQueues     = HE (if ($wd) { "$($wd.PrintQueues.Count)" } else { '' })
+    $winCards  = "<div class='scard sc-win'><div class='lbl'>Platform</div><div class='val'>$winPlatform</div></div>"
+    $winCards += "<div class='scard sc-win'><div class='lbl'>OS</div><div class='val'>$winOs</div></div>"
+    $winCards += "<div class='scard sc-win'><div class='lbl'>RAM</div><div class='val'>$winRam</div></div>"
+    $winCards += "<div class='scard sc-win'><div class='lbl'>Print Queues</div><div class='val'>$winQueues</div></div>"
+    # Build eq cards directly
+    $eqCards  = "<div class='scard sc-eq'><div class='lbl'>Components</div><div class='val'>$($data.Components.Count)</div></div>"
+    $eqCards += "<div class='scard sc-eq'><div class='lbl'>Price Lists</div><div class='val'>$($data.PriceLists.Count)</div></div>"
+    $eqCards += "<div class='scard sc-eq'><div class='lbl'>Workflows</div><div class='val'>$($data.Workflows.Count)</div></div>"
+    $eqCards += "<div class='scard sc-eq'><div class='lbl'>Pull Groups</div><div class='val'>$($data.PullGroups.Count)</div></div>"
+    $eqCards += "<div class='scard sc-eq'><div class='lbl'>Users</div><div class='val'>$($data.Users.Count)</div></div>"
+    $eqCards += "<div class='scard sc-eq'><div class='lbl'>SMTP</div><div class='val'>$(HE $smtp)</div></div>"
+    $eqCards += "<div class='scard sc-eq'><div class='lbl'>Currency</div><div class='val'>$(HE $data.Currency)</div></div>"
+    $eqCards += "<div class='scard sc-eq'><div class='lbl'>License Host</div><div class='val'>$(HE $data.LicenseHost)</div></div>"
     $cardsHtml = "<div class='srow-lbl'>Windows Server</div><div class='sgrid'>$winCards</div>" +
                  "<div class='srow-lbl' style='margin-top:8px'>ControlSuite</div><div class='sgrid'>$eqCards</div>"
 
@@ -1379,7 +1375,7 @@ mainEl.addEventListener('scroll',function(){
               "<div class='tab' onclick=""setTab('r')"">&#128196; Raw Text</div>" +
             "</div>`n" +
             "<div id='pf' class='on'>`n" +
-              "<div class='sum'><h2>Summary</h2><div class='sgrid'>$cardsHtml</div></div>`n" +
+              "<div class='sum'><h2>Summary</h2>$cardsHtml</div>`n" +
               $formatted + "`n</div>`n" +
             "<div id='pr'><pre id='rawpre'>$(HE $rawText)</pre></div>`n" +
             "</div></div>`n" +

@@ -2,51 +2,63 @@
 
 ---
 
-## CURRENT CHECKPOINT — 2026-04-17 (Session 2)
+## CURRENT CHECKPOINT — 2026-05-06 (Session 9)
 
 ### Objective
-Produce a single self-contained `Export-ServerInfo.ps1` that collects all server, print, and solution config (Equitrac/ControlSuite/Nuance/Kofax/Tungsten) into one results file for ConsultantApp AI extraction.
+Fix HTML report summary cards showing blank values after merging `Export-ServerInfo.ps1` Windows data collection into `AsInstalledScanner.ps1`.
 
 ### Completed
-- Organized all scripts into `AsInstalledScanner/` folder structure (root: bat+ps1; `tools/`: collection scripts; `results/`: output; `logs/`: trace).
-- Fixed critical bug: SSH warning lines baked into top of PS1 caused `**` command error on VM. Removed.
-- Added `results\` output folder (auto-created by script).
-- Added `logs\TraceLog_*.txt` — real-time section-by-section progress log, also echoes to console.
-- Added **Section 6b — Print Management Solution** (~300 lines): 10 subsections covering installed products, all brand services (EQ*/Nuance/Kofax/Tungsten), full registry dump of brand keys + EQ* service params, install directory scan + config file connection string extraction, external DB detection (registry + active TCP), SQL inspection via Windows auth (lists DBs, table row counts, full `cas_config` dump + 10 key tables), scheduled tasks, firewall rules, IIS bindings, event log entries.
-- Script pushed to VM: `C:\Temp\AsInstalledScanner\Export-ServerInfo.ps1`. Syntax OK, ~1570 lines.
+- Merged `Collect-WindowsData` function (~230 lines) into `AsInstalledScanner.ps1` — all 4 modes now collect Windows server info (system, OS, hardware, network, roles, SQL, print queues)
+- Fixed `$null = Write-HtmlReport` (output stream leak corrupting `$afterDir` in Run-Full)
+- Fixed EQVar TSV newline bug (multi-line XML broke Compare mode false positives)
+- HTML report: Windows sections added (sidebar nav, 10 new sections), formatted content confirmed correct
+- Summary cards: removed outer `<div class='sgrid'>` wrapper (was nesting grids, causing blank display)
+- Summary cards: replaced `Where-Object` hashtable pipeline with direct string-concat card build
+- EQ cards confirmed working (show correct counts); Windows cards still showing empty values
 
 ### Current
-Script on VM ready to run. Not yet executed this session.
+Windows card values (Platform, OS, RAM, Print Queues) are empty in the HTML summary even though:
+- `Write-FullTxt` correctly outputs Platform, OS, RAM from `$data.WinData`
+- HTML body sections (System Identity etc.) correctly display all Windows data
+- EQ cards display correct counts
+- Root cause not yet confirmed — suspected `Collect-WindowsData` output stream leak making `$winData` an array, so `$wd.Platform` via member enumeration returns wrong type to `HE`
 
 ### Next Step
-Run the script on VM and review output:
+SSH back into CSTEMP (was offline — connection timed out) and run diagnostic:
 ```powershell
-ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\AsInstalledScanner\Export-ServerInfo.ps1"
-scp Administrator@192.168.60.150:"C:/Temp/AsInstalledScanner/results/ServerInfo_CSTEMP_*.txt" C:\Users\quick\
+ssh Administrator@192.168.60.150 "powershell -NoProfile -ExecutionPolicy Bypass -Command \". 'C:\Temp\AsInstalledScanner\tools\AsInstalledScanner.ps1'; \$d = Collect-Data; Write-Host ('WinData type: ' + \$d.WinData.GetType().FullName); Write-Host ('Count: ' + @(\$d.WinData).Count); Write-Host ('Platform: ' + \$d.WinData.Platform)\""
 ```
+If `$winData` is an array → suppress pipeline leaks in `Collect-WindowsData` with `$null = ...` or `| Out-Null`.
+Then redeploy, regenerate, verify cards show values.
 
 ### Pending
-- Verify Section 6b output quality on CSTEMP (SQL Windows auth may need credential fallback if integrated auth fails)
-- `collect_cs_config.ps1` in `tools/` still not run — superseded by Section 6b SQL inspection, but available as standalone if needed
-- Review `cas_config` dump in results for completeness
-
-### Files
-| Location | File | Description |
-|---|---|---|
-| Local + VM | `Export-ServerInfo.ps1` | Main script ~1570 lines, syntax OK |
-| Local + VM | `Export-ServerInfo.bat` | Launcher |
-| Local | `tools/collect_cs_config.ps1` | Standalone cas_* deep-dive (not yet run) |
-| Local | `tools/collect_cs_db.ps1` | DB structure (already run) |
-| Local | `tools/collect_cs_registry.ps1` | Registry dump (already run) |
-| Local | `ControlSuite_Registry.txt` | 123 KB registry dump at `C:\Users\quick\` |
-| Local | `ControlSuite_DB.txt` | 11 KB DB structure at `C:\Users\quick\` |
+- Fix Windows summary card empty values (root cause: confirm & fix)
+- Commit + push fix to `skyconasia-ux/AsInstalledScannerUtility`
+- Add `cas||workflowfolderslastupdatetime` to `$EQVarNoise` (false-positive suppression)
+- Continue UI change mapping: device registration, license seats, user card enrolment, report config
 
 ---
 
 ## HISTORY
 
+### 2026-04-18 Session 4–8
+- Deployed `AsInstalledScanner.ps1` (4 modes: Before/After/Compare/Full) + `.bat` launcher. All modes tested on CSTEMP.
+- Merged `Export-ServerInfo.ps1` Windows data collection into `AsInstalledScanner.ps1`. HTML report now has Windows Server sections (10 sections, sidebar nav).
+- Fixed: output stream leak in `Run-Full`, EQVar TSV newline bug breaking Compare mode.
+- HTML summary cards: removed nested sgrid, rebuilt EQ cards (working). Windows cards still empty (bug open).
+
+### 2026-04-17 Session 3
+- Resolved git merge conflict, pushed full repo to GitHub (`skyconasia-ux/AsInstalledScannerUtility`, commit `1c95884`).
+- Confirmed workflow: edit locally → scp → run on VM → scp results back.
+- `tools\` folder synced to VM. Script ~1570 lines, syntax OK.
+
+### 2026-04-17 Session 2
+- Section 6b added (~300 lines): brand registry dump, services, config files, external DB detection, SQL inspection (cas_config full dump), scheduled tasks, firewall, IIS, event log.
+- SSH warning lines bug fixed (removed from top of PS1).
+- results\ and logs\ output folders added. TraceLog added.
+- tools\ synced to VM. Folder structure organized.
+
 ### 2026-04-17 Session 1
 - All 10 PS1 fixes applied and pushed (`979b3b5`). Full docs pushed.
-- `collect_cs_registry.ps1` run → 123 KB registry dump. Key: Equitrac 6.5.2.191 / ControlSuite 1.5.0.2, 7 EQ* services Running, CAS DB = `eqcas` on `.\SQLExpress`.
-- `collect_cs_db.ps1` run → 11 KB DB structure dump. Key: SQL Server 2022 Express, `eqcas` (144 MB), 96 `cas_*`/`cat_*` tables.
-- Discovered original DB script missed all `cas_*` tables (used `tbl*` naming). `collect_cs_config.ps1` written as fix.
+- Registry + DB structure dumps collected from CSTEMP. Key: Equitrac 6.5.2.191 / ControlSuite 1.5.0.2, 7 EQ* services Running, `eqcas` DB on `.\SQLExpress` (144 MB, 96 tables).
+- Discovered DB script missed all `cas_*` tables. `collect_cs_config.ps1` written as fix.

@@ -298,29 +298,31 @@ Neither namespace exposes finishing/stapling options -- use `Get-PrinterProperty
 
 ---
 
-## Session State (last updated 2026-05-05 Session 8)
+## Session State (last updated 2026-05-06 Session 9)
 
 **Workflow:** Edit locally → scp to VM → run via SSH → scp results back → push to GitHub.
 **SSH:** `ssh Administrator@192.168.60.150` — no password prompt (key auth configured).
 
-**Active VM:** CSTEMP (`192.168.60.150`) — Windows Server 2022, Kofax ControlSuite (Equitrac 6.5.2.191 / ControlSuite 1.5.0.2)
+**Active VM:** CSTEMP (`192.168.60.150`) — Windows Server 2022, Kofax ControlSuite (Equitrac 6.5.2.191 / ControlSuite 1.5.0.2). Was offline at end of Session 9 (connection timeout).
 
-**Primary tool:** `tools/AsInstalledScanner.ps1` — deployed to `C:\Temp\AsInstalledScanner.ps1`. All 4 modes tested and verified working. Output at `C:\Temp\Output\HOSTNAME_YYYYMMDD_HHMMSS_MODE\`.
+**Primary tool:** `tools/AsInstalledScanner.ps1` — deployed to `C:\Temp\AsInstalledScanner\tools\AsInstalledScanner.ps1`. All 4 modes tested and verified working. Output at `C:\Temp\AsInstalledScanner\tools\Output\HOSTNAME_YYYYMMDD_HHMMSS_MODE\`.
 
-**Legacy tools on server:** `C:\Temp\EQ-Snapshot.ps1`, `C:\Temp\EQ-Diff.ps1`, `C:\Temp\Export-EquitracConfig.ps1` — still functional.
+**Merged:** `Collect-WindowsData` (~230 lines) absorbed from `Export-ServerInfo.ps1`. HTML report now includes 10 Windows Server sections with correct data. EQ cards in summary work. Windows cards (Platform/OS/RAM/Print Queues) show empty — bug open.
 
-**sqlite3.exe:** `C:\Windows\System32\sqlite3.exe` (version 3.53.0) — installed on server.
+**Open bug — Windows summary cards empty:**
+- Body sections display `$wd.Platform` correctly via `New-KVTable`
+- Cards display empty via `HE (if ($wd) { $wd.Platform } else { '' })`
+- Suspected cause: `Collect-WindowsData` leaks output → `$winData` becomes array → `$wd.Platform` member enumeration returns unexpected type to `HE`
+- Next: diagnose with `@($d.WinData).Count` on server; if array, add `$null =` suppressors to leaky calls in `Collect-WindowsData`
 
-**SQL quirk:** All eqcas table columns have empty-string names. Only BCP reads work. Credentials: `sa` / `FujiFilm_11111` on `.\SQLExpress`.
+**Fixed bugs (Sessions 7–8):**
+- `$null = Write-HtmlReport` — output stream leak corrupting `$afterDir` in Run-Full
+- SQLite TSV query: `replace(replace(Value,char(10),' '),char(13),''))` — multi-line XML values breaking Compare TSV format
+- Regex noise filter: `'\\.log$'` → `'[.]log$'` in EQ-Diff.ps1
+- Outer `<div class='sgrid'>` removed from summary `<div class='sum'>` wrapper (was nesting grids)
 
-**EQVar config is mirrored:** `cas||` and `dce||` keys exist in both DCE_config.db3 AND DREEQVar.db3. Read from DCE_config.db3 as canonical.
-
-**Known bug fixed (2026-05-05 Session 8):**
-- `Write-HtmlReport` return value was leaking into `Run-After` output stream, corrupting the `$afterDir` path used in `Run-Full`. Fixed with `$null = Write-HtmlReport ...`.
-- EQVar TSV format broken by multi-line XML values (embedded `\n` in SQLite values split TSV rows). Fixed by adding `replace(replace(Value,char(10),' '),char(13),''))` to the TSV export query.
-
-**Noise filter fix (2026-05-05 Session 7):** Regex `'\\.log$'` → `'[.]log$'` in EQ-Diff.ps1.
-
-**Script state:** `Export-ServerInfo.ps1` — ~1570 lines, syntax OK. GitHub: `skyconasia-ux/AsInstalledScannerUtility`.
-
-**See also:** `docs/equitrac-storage-map.md` — full map of where every ControlSuite setting lives.
+**sqlite3.exe:** `C:\Windows\System32\sqlite3.exe` (version 3.53.0).
+**SQL quirk:** All eqcas table columns have empty-string names. BCP only. Credentials: `sa` / `FujiFilm_11111` on `.\SQLExpress`.
+**EQVar:** `cas||` and `dce||` keys in both DCE_config.db3 AND DREEQVar.db3. DCE_config.db3 = canonical.
+**GitHub:** `skyconasia-ux/AsInstalledScannerUtility`.
+**See also:** `docs/equitrac-storage-map.md`.
