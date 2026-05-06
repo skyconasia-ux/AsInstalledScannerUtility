@@ -986,16 +986,10 @@ function Write-HtmlReport {
 
     # --- Summary cards ---
     $smtp = if ($data.SmtpServer) { "$($data.SmtpServer):$($data.SmtpPort)" } else { 'Not set' }
-    $wd   = $data.WinData
-    # Build win cards directly (avoid Where-Object hashtable pipeline quirks)
-    $winPlatform   = HE (if ($wd) { $wd.Platform }   else { '' })
-    $winOs         = HE (if ($wd) { $wd.OsName -replace 'Windows Server ','WS ' } else { '' })
-    $winRam        = HE (if ($wd) { $wd.Ram }         else { '' })
-    $winQueues     = HE (if ($wd) { "$($wd.PrintQueues.Count)" } else { '' })
-    $winCards  = "<div class='scard sc-win'><div class='lbl'>Platform</div><div class='val'>$winPlatform</div></div>"
-    $winCards += "<div class='scard sc-win'><div class='lbl'>OS</div><div class='val'>$winOs</div></div>"
-    $winCards += "<div class='scard sc-win'><div class='lbl'>RAM</div><div class='val'>$winRam</div></div>"
-    $winCards += "<div class='scard sc-win'><div class='lbl'>Print Queues</div><div class='val'>$winQueues</div></div>"
+    $winCards  = "<div class='scard sc-win'><div class='lbl'>Platform</div><div class='val'>$(HE $data.WinData.Platform)</div></div>"
+    $winCards += "<div class='scard sc-win'><div class='lbl'>OS</div><div class='val'>$(HE ($data.WinData.OsName -replace 'Windows Server ','WS '))</div></div>"
+    $winCards += "<div class='scard sc-win'><div class='lbl'>RAM</div><div class='val'>$(HE $data.WinData.Ram)</div></div>"
+    $winCards += "<div class='scard sc-win'><div class='lbl'>Print Queues</div><div class='val'>$($data.WinData.PrintQueues.Count)</div></div>"
     # Build eq cards directly
     $eqCards  = "<div class='scard sc-eq'><div class='lbl'>Components</div><div class='val'>$($data.Components.Count)</div></div>"
     $eqCards += "<div class='scard sc-eq'><div class='lbl'>Price Lists</div><div class='val'>$($data.PriceLists.Count)</div></div>"
