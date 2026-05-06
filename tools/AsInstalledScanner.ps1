@@ -47,7 +47,9 @@ $WatchedKeys = @(
     # Authentication — Access Permissions
     @{ Key='cas||securitypolicysids';                Label='Security Policy SIDs (raw)';       Section='auth'; IsXml=$false },
     # Authentication — External Auth
-    @{ Key='cas||authequitracwcws';                  Label='Windows Auth Enabled';              Section='auth'; IsXml=$false;
+    @{ Key='cas||authequitracwcws';                  Label='Workstation Equitrac Auth';         Section='auth'; IsXml=$false;
+       ValueMap=@{'0'='Disabled';'1'='Enabled with password prompt';'2'='Enabled without password prompt'} },
+    @{ Key='cas||identityproviderwcws';              Label='Workstation Identity Provider';     Section='auth'; IsXml=$false;
        ValueMap=@{'0'='Disabled';'1'='Enabled'} },
     @{ Key='cas||useraccautosync';                   Label='LDAP Sync User Attrs on Login';     Section='auth'; IsXml=$false;
        ValueMap=@{'0'='Disabled';'1'='Enabled'} },
@@ -1228,10 +1230,16 @@ function Build-AuthHtml {
     function DCEnI  { param([string]$v) if ($v -eq '0') { "<span class='dc-on'>Enabled</span>" } else { "<span class='dc-off'>Disabled</span>" } }
     function YNo    { param([string]$v) if ($v -eq '1') { "<span class='eq-on'>&#9745; Yes</span>" } else { "<span class='eq-off'>&#9744; No</span>" } }
     function CBx    { param([string]$v,[string]$t='Y') $on=$v-eq$t-or$v-eq'1'; if($on){"<span class='eq-on'>&#9745; Checked</span>"}else{"<span class='eq-off'>&#9744; Unchecked</span>"} }
-    function AVMap { param([string]$raw,[hashtable]$map)
+    function AVMap  { param([string]$raw,[hashtable]$map)
         $r = FV $raw 300
         if ($map -and $map.ContainsKey($raw)) { return "$raw ($($map[$raw]))" }
         return $r
+    }
+    function AVMapH { param([string]$raw,[hashtable]$map)
+        # Returns just the mapped label as plain-text (no raw prefix); use with ARow
+        if ($map -and $map.ContainsKey($raw)) { return $map[$raw] }
+        if ($raw) { return $raw }
+        return '(not set)'
     }
 
     # --- Access Permissions ---
@@ -1254,7 +1262,8 @@ function Build-AuthHtml {
     # Windows Authentication
     $html += "<div class='sub'>Windows Authentication</div>"
     $winRows = ''
-    $winRows += ARow 'Enable Windows Authentication' (AVMap $kv['cas||authequitracwcws'] @{'0'='Disabled';'1'='Enabled'})
+    $winAuthState = if ($ad -and $ad['Domains'] -and $ad['Domains'].Count -gt 0) { 'Enabled' } else { 'Disabled' }
+    $winRows += ARow 'Enable Windows Authentication' $winAuthState
     if ($ad -and $ad['Domains'] -and $ad['Domains'].Count -gt 0) {
         $j = 1
         foreach ($d in $ad['Domains']) { $winRows += ARow "Domain $j" $d; $j++ }
@@ -1289,7 +1298,6 @@ function Build-AuthHtml {
     }
 
     # --- Device Clients ---
-    # --- Device Clients ---
     $html += AG 'Device Clients'
     $swipeOn  = $kv['dce||enableswipe']
     $reqExtra = $kv['dce||nosecondaryidwithswipe']   # 0=Enabled (inverted key)
@@ -1316,6 +1324,14 @@ function Build-AuthHtml {
     $dcHtml  += ARow 'Default function at device'  (FV $kv['dce||defaultfunction'] 100)
     $dcHtml  += '</table>'
     $html    += $dcHtml
+
+    # --- Workstation Clients and Web Client ---
+    $html += AG 'Workstation Clients and Web Client'
+    $wcAuthMap = @{'0'='Disabled';'1'='Enabled with password prompt';'2'='Enabled without password prompt'}
+    $wcIdpMap  = @{'0'='Disabled';'1'='Enabled'}
+    $wcRows  = ARow 'Equitrac authentication'  (AVMapH $kv['cas||authequitracwcws']  $wcAuthMap)
+    $wcRows += ARow 'Identity provider'         (AVMapH $kv['cas||identityproviderwcws'] $wcIdpMap)
+    $html   += ATable $wcRows
 
     # --- Equitrac Authentication ---
     $html += AG 'Equitrac Authentication'
