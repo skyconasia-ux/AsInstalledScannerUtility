@@ -868,6 +868,7 @@ function Collect-Data {
         DomainQualif   = EV 'cas||upnisdomainqualified'
         DefaultDomain  = EV 'cas||domainqualif'
         SmtpList       = [System.Collections.Generic.List[object]]::new()
+        SnmpPollSecs   = EV 'dre||dmepolltime'
         SnmpList       = [System.Collections.Generic.List[object]]::new()
     }
 
@@ -941,9 +942,11 @@ function Collect-Data {
                     } else {
                         $secName  = if ($proto.SecurityName)  { $proto.SecurityName  } else { '' }
                         $ctxName  = if ($proto.ContextName)   { $proto.ContextName   } else { '' }
-                        $authProt = if ($proto.AuthProtocol)  { $proto.AuthProtocol  } else { '' }
+                        $authProtRaw = if ($proto.AuthProtocol) { $proto.AuthProtocol } else { '' }
+                        $authProt = switch ($authProtRaw) { '1' { 'MD5' } '2' { 'SHA1' } default { $authProtRaw } }
                         $authKey  = if ($proto.AuthKey  -and $proto.AuthKey.Trim())  { 'Configured' } else { 'Not configured' }
-                        $privProt = if ($proto.PrivProtocol)  { $proto.PrivProtocol  } else { '' }
+                        $privProtRaw = if ($proto.PrivProtocol) { $proto.PrivProtocol } else { '' }
+                        $privProt = switch ($privProtRaw) { '1' { 'AES-128' } '2' { 'DES' } default { $privProtRaw } }
                         $privKey  = if ($proto.PrivKey  -and $proto.PrivKey.Trim())  { 'Configured' } else { 'Not configured' }
                         $netData['SnmpList'].Add([PSCustomObject]@{
                             Name=''; SetName=$setName; Version='v3'
@@ -1582,6 +1585,11 @@ function Build-NetworkHtml {
 
     # 4. SNMP Configuration
     $html += NG 'SNMP Configuration'
+    $pollSecs = $nd['SnmpPollSecs']
+    if ($pollSecs -match '^\d+$') {
+        $pollMin = [int]([int]$pollSecs / 60)
+        $html += NTable (NRow 'Polling interval' "$pollMin minute$(if ($pollMin -ne 1) {'s'})")
+    }
     if ($nd['SnmpList'].Count -eq 0) {
         $html += "<p style='color:#aaa;padding:8px;font-size:12px'>No SNMP configurations found.</p>"
     } else {
