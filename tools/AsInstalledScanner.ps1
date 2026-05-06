@@ -75,9 +75,11 @@ $WatchedKeys = @(
     # Quotas and Messages
     @{ Key='cas||colourquota';                  Label='Colour Quota Type';            Section='quota';    IsXml=$false },
     @{ Key='cas||autousercolorquotalimit';       Label='Auto User Color Quota Limit';  Section='quota';    IsXml=$false },
+    @{ Key='dce||facaccesscolorcopy';           Label='Color Copy Feature Access';    Section='quota';    IsXml=$false },
+    @{ Key='cas||bcexcludeifinsufficientfunds'; Label='Block Color Copy on Insuf. Funds'; Section='quota'; IsXml=$false },
     @{ Key='cas||accenforcelimit';              Label='Quota Enforcement';            Section='quota';    IsXml=$false },
     @{ Key='cas||insufficientfundsmsg';         Label='Insufficient Funds Message';   Section='quota';    IsXml=$false },
-    @{ Key='cas||colorquotamessage';            Label='Color Quota Message';          Section='quota';    IsXml=$false },
+    @{ Key='dre||colorquotamessage';            Label='Color Quota Message';          Section='quota';    IsXml=$false },
     # Currency and Accounting
     @{ Key='cas||currencyiso4217';              Label='Currency (ISO 4217)';          Section='currency'; IsXml=$false },
     @{ Key='dce||costpreview';                  Label='Cost Preview Mode';            Section='currency'; IsXml=$false },
