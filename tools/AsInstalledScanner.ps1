@@ -98,11 +98,6 @@ $WatchedKeys = @(
     @{ Key='cas||loginexpiry';                       Label='Login Expiry (seconds)';            Section='auth'; IsXml=$false },
     @{ Key='cas||pin1minlen';                        Label='PIN1 Min Length';                   Section='auth'; IsXml=$false },
     @{ Key='cas||pin1maxlen';                        Label='PIN1 Max Length';                   Section='auth'; IsXml=$false },
-    # SMTP / Email
-    @{ Key='cas||smtpauthenticationsec';        Label='SMTP Config';                  Section='smtp';     IsXml=$true  },
-    @{ Key='cas||emailserver';                  Label='Email Server (legacy key)';    Section='smtp';     IsXml=$false },
-    @{ Key='cas||sendemailnotif';               Label='Send Email Notifications';     Section='smtp';     IsXml=$false },
-    @{ Key='cas||defaultfromaddress';           Label='Default From Address';         Section='smtp';     IsXml=$false },
     # Job Management
     @{ Key='dre|sdr|jobexpirytime';              Label='Job Expiry Time (minutes)';    Section='job';      IsXml=$false },
     @{ Key='dre|sdr|distributionlistjobexpirytime'; Label='Dist. List Expiry (minutes)'; Section='job';   IsXml=$false },
@@ -146,7 +141,6 @@ $WatchedKeys = @(
 $SectionMeta = [ordered]@{
     auth     = 'Authentication'
     network  = 'Global Network Settings'
-    smtp     = 'SMTP / Email'
     job      = 'Job Management'
     quota    = 'Quotas and Messages'
     currency = 'Currency and Accounting'
