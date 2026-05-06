@@ -1203,8 +1203,8 @@ function Build-AuthHtml {
     $html += AG 'Access Permissions'
     $sidRows = ''
     $sids = if ($ad -and $ad['SecurityPolicySids']) { $ad['SecurityPolicySids'] } else { @() }
-    $permLabels = @('Admin', 'Accounts', 'Print Distribution', 'Reports')
-    $permIdx    = @(0, 1, 2, 3)
+    $permLabels = @('Admin', 'Accounts', 'Reports', 'Print Distribution')
+    $permIdx    = @(0, 1, 3, 4)
     for ($pi = 0; $pi -lt 4; $pi++) {
         $idx = $permIdx[$pi]
         $val = if ($sids.Count -gt $idx) { $sids[$idx] } else { '(not set)' }
