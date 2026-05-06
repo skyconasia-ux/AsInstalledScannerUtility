@@ -54,7 +54,7 @@ $WatchedKeys = @(
     @{ Key='cas||useraccautosync';                   Label='LDAP Sync User Attrs on Login';     Section='auth'; IsXml=$false;
        ValueMap=@{'0'='Disabled';'1'='Enabled'} },
     @{ Key='cas||clientauthconfig';                  Label='Auth Method Config (raw XML)';      Section='auth'; IsXml=$true  },
-    @{ Key='ads||settingsdoc';                       Label='AD Sync Settings (raw XML)';        Section='auth'; IsXml=$true  },
+    @{ Key='ads||settingsdoc';                       Label='AD Sync Settings (raw XML)';        Section='dirsync'; IsXml=$true  },
     # Authentication — Device Clients
     @{ Key='dce||enableswipe';                       Label='Allow Card Swipe Login';            Section='auth'; IsXml=$false;
        ValueMap=@{'0'='Off';'1'='On'} },
@@ -140,6 +140,7 @@ $WatchedKeys = @(
 # Section display names (ordered)
 $SectionMeta = [ordered]@{
     auth     = 'Authentication'
+    dirsync  = 'Directory Services Synchronization'
     network  = 'Global Network Settings'
     job      = 'Job Management'
     quota    = 'Quotas and Messages'
@@ -1305,37 +1306,46 @@ function Write-MetadataJson {
 # ============================================================
 # BUILD AUTH HTML (structured Authentication section)
 # ============================================================
+function AG     { param([string]$t) "<div class='auth-grp'>$t</div>" }
+function NG     { param([string]$t) "<div class='auth-grp'>$t</div>" }
+function NRow   { param([string]$k,[string]$v)
+    $ec = if (-not $v -or $v -eq '(not set)') { ' e' } else { '' }
+    "<tr><td class='k'>$(HE $k)</td><td class='v$ec'>$(HE $v)</td></tr>"
+}
+function NTable { param([string]$body) "<table class='kv'>$body</table>" }
+function NRS1   { param([string]$k,[string]$v) "<tr><td class='k sub1'>$(HE $k)</td><td class='v'>$v</td></tr>" }
+function NOn    { param([string]$v,[string]$t='-1') if ($v -eq $t -or $v -eq '1') { "<span class='dc-on'>Enabled</span>" } else { "<span class='dc-off'>Disabled</span>" } }
+function NCB    { param([bool]$on) if ($on) { "<span class='eq-on'>&#9745; Yes</span>" } else { "<span class='eq-off'>&#9744; No</span>" } }
+function NMask  { param([string]$v) if ($v -eq 'Configured') { "<span style='color:#555'>&#11044;&#11044;&#11044;&#11044;&#11044;&#11044; <small style='color:#888'>(configured)</small></span>" } else { "<span class='dc-off'>Not configured</span>" } }
+function ARow   { param([string]$k,[string]$v)
+    $ec = if ($v -eq '(not set)') { ' e' } else { '' }
+    "<tr><td class='k'>$(HE $k)</td><td class='v$ec'>$(HE $v)</td></tr>"
+}
+function ARowH  { param([string]$k,[string]$v) "<tr><td class='k'>$(HE $k)</td><td class='v'>$v</td></tr>" }
+function ARS1   { param([string]$k,[string]$v) "<tr><td class='k sub1'>$(HE $k)</td><td class='v'>$v</td></tr>" }
+function ARS2   { param([string]$k,[string]$v) "<tr><td class='k sub2'>$(HE $k)</td><td class='v'>$v</td></tr>" }
+function SecLbl { param([string]$t) "<tr><td colspan='2' class='sec-lbl'>$(HE $t)</td></tr>" }
+function ATable { param([string]$body) "<table class='kv'>$body</table>" }
+function DCOn   { param([string]$v) if ($v -eq '1') { "<span class='dc-on'>On</span>" } else { "<span class='dc-off'>Off</span>" } }
+function DCEnI  { param([string]$v) if ($v -eq '0') { "<span class='dc-on'>Enabled</span>" } else { "<span class='dc-off'>Disabled</span>" } }
+function YNo    { param([string]$v) if ($v -eq '1') { "<span class='eq-on'>&#9745; Yes</span>" } else { "<span class='eq-off'>&#9744; No</span>" } }
+function CBx    { param([string]$v,[string]$t='Y') $on=$v-eq$t-or$v-eq'1'; if($on){"<span class='eq-on'>&#9745; Checked</span>"}else{"<span class='eq-off'>&#9744; Unchecked</span>"} }
+function AVMap  { param([string]$raw,[hashtable]$map)
+    $r = FV $raw 300
+    if ($map -and $map.ContainsKey($raw)) { return "$raw ($($map[$raw]))" }
+    return $r
+}
+function AVMapH { param([string]$raw,[hashtable]$map)
+    if ($map -and $map.ContainsKey($raw)) { return $map[$raw] }
+    if ($raw) { return $raw }
+    return '(not set)'
+}
+
 function Build-AuthHtml {
     param($data)
     $ad = $data.AuthData
     $kv = $data.KeyValues
     $html = ''
-
-    function AG     { param([string]$t) "<div class='auth-grp'>$t</div>" }
-    function ARow   { param([string]$k,[string]$v)
-        $ec = if ($v -eq '(not set)') { ' e' } else { '' }
-        "<tr><td class='k'>$(HE $k)</td><td class='v$ec'>$(HE $v)</td></tr>"
-    }
-    function ARowH  { param([string]$k,[string]$v) "<tr><td class='k'>$(HE $k)</td><td class='v'>$v</td></tr>" }
-    function ARS1   { param([string]$k,[string]$v) "<tr><td class='k sub1'>$(HE $k)</td><td class='v'>$v</td></tr>" }
-    function ARS2   { param([string]$k,[string]$v) "<tr><td class='k sub2'>$(HE $k)</td><td class='v'>$v</td></tr>" }
-    function SecLbl { param([string]$t) "<tr><td colspan='2' class='sec-lbl'>$(HE $t)</td></tr>" }
-    function ATable { param([string]$body) "<table class='kv'>$body</table>" }
-    function DCOn   { param([string]$v) if ($v -eq '1') { "<span class='dc-on'>On</span>" } else { "<span class='dc-off'>Off</span>" } }
-    function DCEnI  { param([string]$v) if ($v -eq '0') { "<span class='dc-on'>Enabled</span>" } else { "<span class='dc-off'>Disabled</span>" } }
-    function YNo    { param([string]$v) if ($v -eq '1') { "<span class='eq-on'>&#9745; Yes</span>" } else { "<span class='eq-off'>&#9744; No</span>" } }
-    function CBx    { param([string]$v,[string]$t='Y') $on=$v-eq$t-or$v-eq'1'; if($on){"<span class='eq-on'>&#9745; Checked</span>"}else{"<span class='eq-off'>&#9744; Unchecked</span>"} }
-    function AVMap  { param([string]$raw,[hashtable]$map)
-        $r = FV $raw 300
-        if ($map -and $map.ContainsKey($raw)) { return "$raw ($($map[$raw]))" }
-        return $r
-    }
-    function AVMapH { param([string]$raw,[hashtable]$map)
-        # Returns just the mapped label as plain-text (no raw prefix); use with ARow
-        if ($map -and $map.ContainsKey($raw)) { return $map[$raw] }
-        if ($raw) { return $raw }
-        return '(not set)'
-    }
 
     # --- Access Permissions ---
     # Positions in cas||securitypolicysids: 0=Admin, 1=Accounts, 2=Print Distribution, 3=Reports
@@ -1518,17 +1528,6 @@ function Build-NetworkHtml {
     $nd  = $data.NetData
     $html = ''
 
-    function NG  { param([string]$t) "<div class='auth-grp'>$t</div>" }
-    function NRow{ param([string]$k,[string]$v)
-        $ec = if (-not $v -or $v -eq '(not set)') { ' e' } else { '' }
-        "<tr><td class='k'>$(HE $k)</td><td class='v$ec'>$(HE $v)</td></tr>"
-    }
-    function NTable { param([string]$body) "<table class='kv'>$body</table>" }
-    function NRS1   { param([string]$k,[string]$v) "<tr><td class='k sub1'>$(HE $k)</td><td class='v'>$v</td></tr>" }
-    function NOn    { param([string]$v,[string]$t='-1') if ($v -eq $t -or $v -eq '1') { "<span class='dc-on'>Enabled</span>" } else { "<span class='dc-off'>Disabled</span>" } }
-    function NCB    { param([bool]$on) if ($on) { "<span class='eq-on'>&#9745; Yes</span>" } else { "<span class='eq-off'>&#9744; No</span>" } }
-    function NMask  { param([string]$v) if ($v -eq 'Configured') { "<span style='color:#555'>&#11044;&#11044;&#11044;&#11044;&#11044;&#11044; <small style='color:#888'>(configured)</small></span>" } else { "<span class='dc-off'>Not configured</span>" } }
-
     # 1. Backward Compatibility
     $html += NG 'Backward Compatibility'
     $vUpgrade = if ($nd['UpgradeMode'] -eq '1') { 'Enabled' } else { 'Disabled' }
@@ -1618,6 +1617,54 @@ function Build-NetworkHtml {
             }
             $html += '</table></details>'
         }
+    }
+
+    return $html
+}
+
+function Build-DirSyncHtml {
+    param($data)
+    $html = ''
+    $xml = $data.KeyValues['ads||settingsdoc']
+    if (-not $xml) {
+        return "<p style='color:#aaa;padding:8px;font-size:12px'>No directory sync configuration found.</p>"
+    }
+    try { $doc = [xml]$xml } catch { return "<p style='color:#aaa;padding:8px;font-size:12px'>Could not parse AD sync settings.</p>" }
+
+    $html += AG 'Active Directory'
+
+    $servers = $doc.ADSyncSettings.ChildNodes
+    if (-not $servers -or $servers.Count -eq 0) {
+        $html += "<p style='color:#aaa;padding:8px;font-size:12px'>No AD servers configured.</p>"
+        return $html
+    }
+
+    foreach ($srv in $servers) {
+        $dc        = if ($srv.DomainController) { $srv.DomainController } else { '' }
+        $partition = if ($srv.ApplicationPartition -and $srv.ApplicationPartition.Trim()) { $srv.ApplicationPartition } `
+                     elseif ($srv.Domain -and $srv.Domain.Trim()) { $srv.Domain } else { '(not set)' }
+        $authUser  = if ($srv.AuthUserName -and $srv.AuthUserName.Trim()) { '●●●●●● (configured)' } else { 'Not configured' }
+        $autoSync  = NOn $srv.DoAutoSync
+        $freqMin   = if ($srv.UpdateFrequency -match '^\d+$') { "$($srv.UpdateFrequency) minutes" } else { '(not set)' }
+
+        $html += "<details class='net-detail' open><summary>$(HE $dc)</summary>"
+        $html += "<table class='kv'>"
+        $html += ARowH 'Domain Controller' (HE $dc)
+        $html += ARowH 'Naming Context / Partition' (HE $partition)
+        $html += ARowH 'Auth username' $authUser
+        $html += ARowH 'Auto sync' $autoSync
+        $html += ARowH 'Update frequency' (HE $freqMin)
+
+        # Containers
+        $containers = $srv.Containers
+        if ($containers -and $containers.ChildNodes.Count -gt 0) {
+            $html += "<tr><td colspan='2' class='sec-lbl'>Containers</td></tr>"
+            foreach ($c in $containers.ChildNodes) {
+                $dn = if ($c.ContainerDN) { $c.ContainerDN } else { '' }
+                $html += ARS1 'DN' (HE $dn)
+            }
+        }
+        $html += '</table></details>'
     }
 
     return $html
@@ -1905,6 +1952,10 @@ function Write-HtmlReport {
     foreach ($sec in $SectionMeta.Keys) {
         if ($sec -eq 'auth') {
             $keyHtml += New-HtmlSection $sec $SectionMeta[$sec] (Build-AuthHtml $data)
+            continue
+        }
+        if ($sec -eq 'dirsync') {
+            $keyHtml += New-HtmlSection $sec $SectionMeta[$sec] (Build-DirSyncHtml $data)
             continue
         }
         if ($sec -eq 'network') {
