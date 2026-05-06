@@ -89,7 +89,7 @@ $WatchedKeys = @(
     @{ Key='dce||supportofflinemode';                Label='Login Caching';                     Section='auth'; IsXml=$false;
        ValueMap=@{'0'='Disabled';'1'='Enabled'} },
     @{ Key='cas||casdownaction';                     Label='Print Behavior';                    Section='auth'; IsXml=$false;
-       ValueMap=@{'PrintChargeLater'='Print, charge accounts later';'AutoSelect'='Auto select';'DoNotPrint'='Do not print'} },
+       ValueMap=@{'PrintChargeLater'='Print, charge accounts later';'AutoSelect'='Auto select';'Auto'='Auto select';'DoNotPrint'='Do not print'} },
     # Authentication — Misc
     @{ Key='dce||adminpin';                          Label='Admin PIN';                         Section='auth'; IsXml=$false },
     @{ Key='dce||maxpinlength';                      Label='Max PIN Length';                    Section='auth'; IsXml=$false },
@@ -747,6 +747,10 @@ function Collect-Data {
 
     $keyValues = @{}
     foreach ($wk in $WatchedKeys) { $keyValues[$wk.Key] = EV $wk.Key }
+    # Keys that live authoritatively in DRE — override DCE-first EV result
+    foreach ($dk in @('cas||casdownaction')) {
+        if ($script:dre.ContainsKey($dk)) { $keyValues[$dk] = $script:dre[$dk] }
+    }
 
     # SMTP parse
     $smtpXml  = EV 'cas||smtpauthenticationsec'
@@ -1363,7 +1367,7 @@ function Build-AuthHtml {
     $offRows += ARow 'Login Cache TTL (days)'    (FV $kv['dce||cacheuserloginofflinettldays']  50)
     $offRows += ARow 'Login Expiry (seconds)'    (FV $kv['cas||loginexpiry']                   50)
     $vPrint = if ($kv['cas||casdownaction']) { $kv['cas||casdownaction'] } else { '' }
-    $printMap = @{'PrintChargeLater'='Print, charge accounts later';'AutoSelect'='Auto select';'DoNotPrint'='Do not print'}
+    $printMap = @{'PrintChargeLater'='Print, charge accounts later';'AutoSelect'='Auto select';'Auto'='Auto select';'DoNotPrint'='Do not print'}
     $offRows += ARow 'Print Behavior'            (AVMap $vPrint $printMap)
     $html += ATable $offRows
 
