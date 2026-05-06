@@ -44,21 +44,54 @@ $DbBase     = 'C:\Windows\System32\config\systemprofile\AppData\Local\Equitrac\E
 # IsXml: $true = value is an XML blob (truncated in summary, expanded in full)
 # ============================================================
 $WatchedKeys = @(
-    # Authentication
-    @{ Key='cas||clientauthconfig';             Label='Auth Method Config';           Section='auth';     IsXml=$true  },
-    @{ Key='dce||enableswipe';                  Label='Card Swipe Enabled';           Section='auth';     IsXml=$false },
-    @{ Key='dce||registerpin';                  Label='Register PIN';                 Section='auth';     IsXml=$false },
-    @{ Key='dce||registerpinasalternate';       Label='PIN as Alternate to Card';     Section='auth';     IsXml=$false },
-    @{ Key='dce||registertwocards';             Label='Register Two Cards';           Section='auth';     IsXml=$false },
-    @{ Key='dce||nosecondaryidwithswipe';       Label='No Secondary ID with Swipe';   Section='auth';     IsXml=$false },
-    @{ Key='dce||adminpin';                     Label='Admin PIN';                    Section='auth';     IsXml=$false },
-    @{ Key='dce||maxpinlength';                 Label='Max PIN Length';               Section='auth';     IsXml=$false },
-    @{ Key='cas||encryptsecondarypin';          Label='Encrypt Secondary PIN';        Section='auth';     IsXml=$false },
-    @{ Key='dce||authequitraccardreg';          Label='Equitrac Card Registration';   Section='auth';     IsXml=$false },
-    @{ Key='dce||authidentityprovidercardreg';  Label='Identity Provider Card Reg';   Section='auth';     IsXml=$false },
-    @{ Key='dce||defaultfunction';              Label='Default Function at Device';   Section='auth';     IsXml=$false },
-    @{ Key='cas||loginexpiry';                  Label='Login Expiry (seconds)';       Section='auth';     IsXml=$false },
-    @{ Key='ads||settingsdoc';                  Label='AD/LDAP Sync Settings';        Section='auth';     IsXml=$true  },
+    # Authentication — Access Permissions
+    @{ Key='cas||securitypolicysids';                Label='Security Policy SIDs (raw)';       Section='auth'; IsXml=$false },
+    # Authentication — External Auth
+    @{ Key='cas||authequitracwcws';                  Label='Windows Auth Enabled';              Section='auth'; IsXml=$false;
+       ValueMap=@{'0'='Disabled';'1'='Enabled'} },
+    @{ Key='cas||clientauthconfig';                  Label='Auth Method Config (raw XML)';      Section='auth'; IsXml=$true  },
+    @{ Key='ads||settingsdoc';                       Label='AD Sync Settings (raw XML)';        Section='auth'; IsXml=$true  },
+    # Authentication — Device Clients
+    @{ Key='dce||enableswipe';                       Label='Allow Card Swipe Login';            Section='auth'; IsXml=$false;
+       ValueMap=@{'0'='Off';'1'='On'} },
+    @{ Key='dce||nosecondaryidwithswipe';            Label='Req. Extra Auth with Swipe';        Section='auth'; IsXml=$false;
+       ValueMap=@{'0'='Enabled';'1'='Disabled'} },
+    @{ Key='dce||registerpin';                       Label='Allow Keyboard Login';              Section='auth'; IsXml=$false;
+       ValueMap=@{'0'='Off';'1'='On'} },
+    @{ Key='dce||requirepasswordifavailablekeyboard';Label='Req. Password if PIN2 Available';   Section='auth'; IsXml=$false;
+       ValueMap=@{'0'='No';'1'='Yes'} },
+    @{ Key='dce||denypromptemptypassword';           Label='Deny Login with Empty Password';    Section='auth'; IsXml=$false;
+       ValueMap=@{'0'='No';'1'='Yes'} },
+    @{ Key='dce||defaultfunction';                   Label='Default Function at Device';        Section='auth'; IsXml=$false },
+    # Authentication — Workstation / Web Client
+    @{ Key='cas||caspin1pcmanager';                  Label='PIN1 in PC Manager';                Section='auth'; IsXml=$false },
+    @{ Key='cas||caspin2pcmanager';                  Label='PIN2 in PC Manager';                Section='auth'; IsXml=$false },
+    # Authentication — Card Registration
+    @{ Key='dce||authequitraccardreg';               Label='Card Reg: Equitrac Auth';           Section='auth'; IsXml=$false;
+       ValueMap=@{'0'='Off';'1'='On'} },
+    @{ Key='dce||authidentityprovidercardreg';       Label='Card Reg: Identity Provider';       Section='auth'; IsXml=$false;
+       ValueMap=@{'0'='Off';'1'='On'} },
+    @{ Key='dce||registerpinasalternate';            Label='Card Storage: Alternate PIN';       Section='auth'; IsXml=$false;
+       ValueMap=@{'0'='Store as Primary PIN';'1'='Store as Alternate PIN'} },
+    @{ Key='dce||registertwocards';                  Label='Dual Card Reader Mode';             Section='auth'; IsXml=$false;
+       ValueMap=@{'0'='Disabled';'1'='Enabled'} },
+    # Authentication — Encryption
+    @{ Key='cas||encryptsecondarypin';               Label='Store Secondary PIN Encrypted';     Section='auth'; IsXml=$false;
+       ValueMap=@{'N'='Disabled';'Y'='Enabled'} },
+    # Authentication — Card Setup
+    @{ Key='cas||casstartpinposition';               Label='Card Data: From Position';          Section='auth'; IsXml=$false },
+    @{ Key='cas||casendpinposition';                 Label='Card Data: To Position';            Section='auth'; IsXml=$false },
+    @{ Key='dce||hidparameters';                     Label='HID Decoding Parameters (raw XML)'; Section='auth'; IsXml=$true  },
+    # Authentication — CAS Offline Behavior
+    @{ Key='dce||cacheuserloginofflinettldays';      Label='Login Cache TTL (days, 0=disabled)';Section='auth'; IsXml=$false },
+    @{ Key='dce||supportofflinemode';                Label='Offline Mode';                      Section='auth'; IsXml=$false;
+       ValueMap=@{'0'='Disabled';'1'='Enabled'} },
+    # Authentication — Misc
+    @{ Key='dce||adminpin';                          Label='Admin PIN';                         Section='auth'; IsXml=$false },
+    @{ Key='dce||maxpinlength';                      Label='Max PIN Length';                    Section='auth'; IsXml=$false },
+    @{ Key='cas||loginexpiry';                       Label='Login Expiry (seconds)';            Section='auth'; IsXml=$false },
+    @{ Key='cas||pin1minlen';                        Label='PIN1 Min Length';                   Section='auth'; IsXml=$false },
+    @{ Key='cas||pin1maxlen';                        Label='PIN1 Max Length';                   Section='auth'; IsXml=$false },
     # SMTP / Email
     @{ Key='cas||smtpauthenticationsec';        Label='SMTP Config';                  Section='smtp';     IsXml=$true  },
     @{ Key='cas||emailserver';                  Label='Email Server (legacy key)';    Section='smtp';     IsXml=$false },
@@ -717,6 +750,80 @@ function Collect-Data {
     $smtpSrv  = ''; $smtpPort = ''
     if ($smtpAddr -match '^([^:]+):(\d+)$') { $smtpSrv=$Matches[1]; $smtpPort=$Matches[2] }
 
+    # Auth data — parsed from EQVar values for structured HTML rendering
+    $authData = @{}
+
+    # Resolve security policy SIDs to account names
+    $rawSids = EV 'cas||securitypolicysids'
+    $resolvedSids = [System.Collections.Generic.List[string]]::new()
+    if ($rawSids) {
+        foreach ($sid in ($rawSids -split ';')) {
+            $sid = $sid.Trim()
+            if (-not $sid) { continue }
+            try {
+                $name = (New-Object System.Security.Principal.SecurityIdentifier($sid)).Translate([System.Security.Principal.NTAccount]).Value
+                $resolvedSids.Add("$name  ($sid)")
+            } catch {
+                $resolvedSids.Add($sid)
+            }
+        }
+    }
+    $authData['SecurityPolicySids'] = $resolvedSids
+
+    # Parse clientauthconfig XML — domain list and auth method flags
+    $cacXml = EV 'cas||clientauthconfig'
+    $authData['AuthEquitracPINS']         = ''
+    $authData['AuthExternalUserIDPassword'] = ''
+    $authData['AuthExternalPassword']     = ''
+    $authData['Domains']                  = [System.Collections.Generic.List[string]]::new()
+    if ($cacXml) {
+        try {
+            $xdoc = [xml]$cacXml
+            $root = $xdoc.DocumentElement
+            $authData['AuthEquitracPINS']           = if ($root.EquitracPINS)           { $root.EquitracPINS }           else { '' }
+            $authData['AuthExternalUserIDPassword'] = if ($root.ExternalUserIDPassword) { $root.ExternalUserIDPassword } else { '' }
+            $authData['AuthExternalPassword']       = if ($root.ExternalPassword)       { $root.ExternalPassword }       else { '' }
+            # Domain entries are <item0>, <item1>, ... with <type>0</type> and <default>domainname</default>
+            $i = 0
+            while ($true) {
+                $item = $root.SelectSingleNode("item$i")
+                if (-not $item) { break }
+                if ($item.type -eq '0') { $authData['Domains'].Add($item.default) }
+                $i++
+            }
+        } catch { }
+    }
+
+    # Parse hidparameters XML — HID card groups
+    $hidXml = EV 'dce||hidparameters'
+    $authData['HidGroups'] = [System.Collections.Generic.List[object]]::new()
+    if ($hidXml) {
+        try {
+            $xdoc = [xml]$hidXml
+            $root = $xdoc.DocumentElement
+            # Groups are direct child elements; each has a name attribute and child items
+            foreach ($grpNode in $root.ChildNodes) {
+                if ($grpNode.NodeType -ne 1) { continue }
+                $grpName = $grpNode.Name
+                $items = [System.Collections.Generic.List[object]]::new()
+                foreach ($itemNode in $grpNode.ChildNodes) {
+                    if ($itemNode.NodeType -ne 1) { continue }
+                    $items.Add([PSCustomObject]@{
+                        FacStart  = if ($itemNode.FacStart)  { $itemNode.FacStart }  else { '' }
+                        FacEnd    = if ($itemNode.FacEnd)    { $itemNode.FacEnd }    else { '' }
+                        FacWidth  = if ($itemNode.FacWidth)  { $itemNode.FacWidth }  else { '' }
+                        FacMatch  = if ($itemNode.FacMatch)  { $itemNode.FacMatch }  else { '' }
+                        UseAsPIN  = if ($itemNode.UseAsPIN)  { $itemNode.UseAsPIN }  else { '' }
+                        IDStart   = if ($itemNode.IDStart)   { $itemNode.IDStart }   else { '' }
+                        IDEnd     = if ($itemNode.IDEnd)     { $itemNode.IDEnd }     else { '' }
+                        IDWidth   = if ($itemNode.IDWidth)   { $itemNode.IDWidth }   else { '' }
+                    })
+                }
+                $authData['HidGroups'].Add([PSCustomObject]@{ GroupName=$grpName; Items=$items })
+            }
+        } catch { }
+    }
+
     return [PSCustomObject]@{
         Hostname   = $hostname
         AppName    = $AppName
@@ -735,6 +842,7 @@ function Collect-Data {
         DceMap     = $script:dce
         DreMap     = $script:dre
         WinData    = $winData
+        AuthData   = $authData
     }
 }
 
@@ -1063,6 +1171,131 @@ function Write-MetadataJson {
 }
 
 # ============================================================
+# BUILD AUTH HTML (structured Authentication section)
+# ============================================================
+function Build-AuthHtml {
+    param($data)
+    $ad = $data.AuthData
+    $kv = $data.KeyValues
+    $html = ''
+
+    function AG { param([string]$t) "<div class='auth-grp'>$t</div>" }
+    function ARow { param([string]$k,[string]$v)
+        $ec = if ($v -eq '(not set)') { ' e' } else { '' }
+        "<tr><td class='k'>$(HE $k)</td><td class='v$ec'>$(HE $v)</td></tr>"
+    }
+    function ATable { param([string]$body) "<table class='kv'>$body</table>" }
+    function AVMap { param([string]$raw,[hashtable]$map)
+        $r = FV $raw 300
+        if ($map -and $map.ContainsKey($raw)) { return "$raw ($($map[$raw]))" }
+        return $r
+    }
+
+    # --- Access Permissions ---
+    $html += AG 'Access Permissions'
+    $sidRows = ''
+    if ($ad -and $ad['SecurityPolicySids'] -and $ad['SecurityPolicySids'].Count -gt 0) {
+        $i = 1
+        foreach ($s in $ad['SecurityPolicySids']) { $sidRows += ARow "Admin Group $i" $s; $i++ }
+    } else { $sidRows += ARow 'Security Policy Groups' '(not set)' }
+    $html += ATable $sidRows
+
+    # --- External Authentication ---
+    $html += AG 'External Authentication'
+    $extRows = ''
+    $extRows += ARow 'Windows Auth (WCWS)' (AVMap $kv['cas||authequitracwcws'] @{'0'='Disabled';'1'='Enabled'})
+    # Parse domains from authData
+    if ($ad -and $ad['Domains'] -and $ad['Domains'].Count -gt 0) {
+        $j = 1
+        foreach ($d in $ad['Domains']) { $extRows += ARow "Domain $j" $d; $j++ }
+    } else { $extRows += ARow 'Domains' '(not set)' }
+    $extRows += ARow 'AD Sync Settings' (FV $kv['ads||settingsdoc'] 80)
+    $html += ATable $extRows
+
+    # --- Device Clients ---
+    $html += AG 'Device Clients'
+    $dcRows = ''
+    $dcRows += ARow 'Allow Card Swipe Login'       (AVMap $kv['dce||enableswipe']             @{'0'='Off';'1'='On'})
+    $dcRows += ARow 'Req. Extra Auth with Swipe'   (AVMap $kv['dce||nosecondaryidwithswipe']  @{'0'='Enabled';'1'='Disabled'})
+    $dcRows += ARow 'Allow Keyboard Login'          (AVMap $kv['dce||registerpin']             @{'0'='Off';'1'='On'})
+    $dcRows += ARow 'Req. Password if PIN2 Avail.'  (AVMap $kv['dce||requirepasswordifavailablekeyboard'] @{'0'='No';'1'='Yes'})
+    $dcRows += ARow 'Deny Login with Empty Password'(AVMap $kv['dce||denypromptemptypassword'] @{'0'='No';'1'='Yes'})
+    $dcRows += ARow 'Default Function at Device'    (FV $kv['dce||defaultfunction'] 100)
+    $html += ATable $dcRows
+
+    # --- Workstation / Web Client ---
+    $html += AG 'Workstation / Web Client'
+    $wcRows = ''
+    $wcRows += ARow 'PIN1 in PC Manager' (FV $kv['cas||caspin1pcmanager'] 100)
+    $wcRows += ARow 'PIN2 in PC Manager' (FV $kv['cas||caspin2pcmanager'] 100)
+    # Auth methods from clientauthconfig
+    $vPins  = if ($ad -and $ad['AuthEquitracPINS'])           { $ad['AuthEquitracPINS'] }           else { '(not set)' }
+    $vExtUP = if ($ad -and $ad['AuthExternalUserIDPassword']) { $ad['AuthExternalUserIDPassword'] } else { '(not set)' }
+    $vExtP  = if ($ad -and $ad['AuthExternalPassword'])       { $ad['AuthExternalPassword'] }       else { '(not set)' }
+    $wcRows += ARow 'Equitrac PINs Auth'         $vPins
+    $wcRows += ARow 'External User+Password Auth' $vExtUP
+    $wcRows += ARow 'External Password Auth'      $vExtP
+    $html += ATable $wcRows
+
+    # --- Card Registration ---
+    $html += AG 'Card Registration'
+    $crRows = ''
+    $crRows += ARow 'Card Reg: Equitrac Auth'     (AVMap $kv['dce||authequitraccardreg']         @{'0'='Off';'1'='On'})
+    $crRows += ARow 'Card Reg: Identity Provider' (AVMap $kv['dce||authidentityprovidercardreg'] @{'0'='Off';'1'='On'})
+    $crRows += ARow 'Card Storage Mode'           (AVMap $kv['dce||registerpinasalternate']      @{'0'='Store as Primary PIN';'1'='Store as Alternate PIN'})
+    $crRows += ARow 'Dual Card Reader Mode'       (AVMap $kv['dce||registertwocards']            @{'0'='Disabled';'1'='Enabled'})
+    $html += ATable $crRows
+
+    # --- Encryption ---
+    $html += AG 'Encryption'
+    $encRows = ARow 'Store Secondary PIN Encrypted' (AVMap $kv['cas||encryptsecondarypin'] @{'N'='Disabled';'Y'='Enabled'})
+    $html += ATable $encRows
+
+    # --- Card Setup (PIN Positions + HID Groups) ---
+    $html += AG 'Card Setup'
+    $csRows = ''
+    $csRows += ARow 'Card Data: From Position' (FV $kv['cas||casstartpinposition'] 50)
+    $csRows += ARow 'Card Data: To Position'   (FV $kv['cas||casendpinposition']   50)
+    $csRows += ARow 'Admin PIN'                (FV $kv['dce||adminpin']            50)
+    $csRows += ARow 'Max PIN Length'           (FV $kv['dce||maxpinlength']        50)
+    $csRows += ARow 'PIN1 Min Length'          (FV $kv['cas||pin1minlen']          50)
+    $csRows += ARow 'PIN1 Max Length'          (FV $kv['cas||pin1maxlen']          50)
+    $html += ATable $csRows
+
+    # HID Groups sub-table
+    if ($ad -and $ad['HidGroups'] -and $ad['HidGroups'].Count -gt 0) {
+        foreach ($grp in $ad['HidGroups']) {
+            $html += "<div class='sub'>HID Group: $(HE $grp.GroupName)</div>"
+            $hidRows = ''
+            foreach ($item in $grp.Items) {
+                $usePin = switch ($item.UseAsPIN) { 'FacID' {'Facility ID as PIN'} 'CardID' {'Card ID as PIN'} 'Both' {'Both'} default { HE $item.UseAsPIN } }
+                $hidRows += ARow 'Facility: Start Bit'   $item.FacStart
+                $hidRows += ARow 'Facility: End Bit'     $item.FacEnd
+                $hidRows += ARow 'Facility: Width'       $item.FacWidth
+                $hidRows += ARow 'Facility: Match Value' $item.FacMatch
+                $hidRows += ARow 'Use As PIN'            $usePin
+                $hidRows += ARow 'ID: Start Bit'         $item.IDStart
+                $hidRows += ARow 'ID: End Bit'           $item.IDEnd
+                $hidRows += ARow 'ID: Width'             $item.IDWidth
+            }
+            $html += ATable $hidRows
+        }
+    } else {
+        $html += "<div class='sub'>HID Decoding Groups</div><table class='kv'><tr><td class='k'>HID Parameters</td><td class='v e'>(not set)</td></tr></table>"
+    }
+
+    # --- CAS Offline Behavior ---
+    $html += AG 'CAS Offline Behavior'
+    $offRows = ''
+    $offRows += ARow 'Offline Mode'              (AVMap $kv['dce||supportofflinemode']          @{'0'='Disabled';'1'='Enabled'})
+    $offRows += ARow 'Login Cache TTL (days)'    (FV $kv['dce||cacheuserloginofflinettldays']  50)
+    $offRows += ARow 'Login Expiry (seconds)'    (FV $kv['cas||loginexpiry']                   50)
+    $html += ATable $offRows
+
+    return $html
+}
+
+# ============================================================
 # WRITE HTML REPORT
 # ============================================================
 function Write-HtmlReport {
@@ -1342,6 +1575,10 @@ function Write-HtmlReport {
     # --- Watched key sections ---
     $keyHtml = ''
     foreach ($sec in $SectionMeta.Keys) {
+        if ($sec -eq 'auth') {
+            $keyHtml += New-HtmlSection $sec $SectionMeta[$sec] (Build-AuthHtml $data)
+            continue
+        }
         $rows = [System.Collections.Generic.List[object]]::new()
         foreach ($wk in ($WatchedKeys | Where-Object { $_.Section -eq $sec })) {
             $raw = FV $data.KeyValues[$wk.Key] 300
@@ -1461,6 +1698,7 @@ table.kv .v{color:#111}
 table.kv .v.e{color:#bbb;font-style:italic}
 .sub{margin-top:10px;margin-bottom:5px;font-size:11px;font-weight:bold;color:#666;text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid #eee;padding-bottom:3px}
 .inst-hdr{margin-top:14px;margin-bottom:6px;padding:7px 12px;background:#1a2744;color:#fff;border-radius:5px;font-size:12px;font-weight:bold;letter-spacing:.4px}
+.auth-grp{margin-top:12px;margin-bottom:6px;padding:5px 10px;background:#eef2ff;border-left:3px solid #1a56db;border-radius:0 4px 4px 0;font-size:11px;font-weight:bold;color:#1a3a8a;text-transform:uppercase;letter-spacing:.3px}
 pre#rawpre{background:#1e1e1e;color:#d4d4d4;padding:14px;border-radius:6px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all}
 mark{background:#ffd600;color:#000;border-radius:2px}
 .hi{display:none!important}
