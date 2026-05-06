@@ -795,31 +795,38 @@ function Collect-Data {
     }
 
     # Parse hidparameters XML — HID card groups
+    # Structure: HIDParameters > Groups > item0..N > { GroupName, IsDefault, Items > item0..N }
     $hidXml = EV 'dce||hidparameters'
     $authData['HidGroups'] = [System.Collections.Generic.List[object]]::new()
     if ($hidXml) {
         try {
             $xdoc = [xml]$hidXml
-            $root = $xdoc.DocumentElement
-            # Groups are direct child elements; each has a name attribute and child items
-            foreach ($grpNode in $root.ChildNodes) {
-                if ($grpNode.NodeType -ne 1) { continue }
-                $grpName = $grpNode.Name
-                $items = [System.Collections.Generic.List[object]]::new()
-                foreach ($itemNode in $grpNode.ChildNodes) {
-                    if ($itemNode.NodeType -ne 1) { continue }
-                    $items.Add([PSCustomObject]@{
-                        FacStart  = if ($itemNode.FacStart)  { $itemNode.FacStart }  else { '' }
-                        FacEnd    = if ($itemNode.FacEnd)    { $itemNode.FacEnd }    else { '' }
-                        FacWidth  = if ($itemNode.FacWidth)  { $itemNode.FacWidth }  else { '' }
-                        FacMatch  = if ($itemNode.FacMatch)  { $itemNode.FacMatch }  else { '' }
-                        UseAsPIN  = if ($itemNode.UseAsPIN)  { $itemNode.UseAsPIN }  else { '' }
-                        IDStart   = if ($itemNode.IDStart)   { $itemNode.IDStart }   else { '' }
-                        IDEnd     = if ($itemNode.IDEnd)     { $itemNode.IDEnd }     else { '' }
-                        IDWidth   = if ($itemNode.IDWidth)   { $itemNode.IDWidth }   else { '' }
+            $groupsNode = $xdoc.DocumentElement.SelectSingleNode('Groups')
+            if ($groupsNode) {
+                foreach ($grpNode in $groupsNode.ChildNodes) {
+                    if ($grpNode.NodeType -ne 1) { continue }
+                    $grpName    = if ($grpNode.GroupName) { $grpNode.GroupName } else { $grpNode.Name }
+                    $isDefault  = $grpNode.IsDefault -eq '-1'
+                    $items      = [System.Collections.Generic.List[object]]::new()
+                    $itemsNode  = $grpNode.SelectSingleNode('Items')
+                    if ($itemsNode) {
+                        foreach ($itemNode in $itemsNode.ChildNodes) {
+                            if ($itemNode.NodeType -ne 1) { continue }
+                            $facPIN = if ($itemNode.UseAsPIN) { $itemNode.UseAsPIN } else { '' }
+                            $items.Add([PSCustomObject]@{
+                                FacCode  = "$($itemNode.FacStart),$($itemNode.FacEnd),$($itemNode.FacWidth)"
+                                FacMatch = if ($itemNode.FacMatch) { $itemNode.FacMatch } else { '' }
+                                FacInPIN = if ($facPIN -eq 'FacID') { 'Yes' } elseif ($facPIN) { $facPIN } else { 'No' }
+                                IDCode   = "$($itemNode.IDStart),$($itemNode.IDEnd),$($itemNode.IDWidth)"
+                            })
+                        }
+                    }
+                    $authData['HidGroups'].Add([PSCustomObject]@{
+                        GroupName = $grpName
+                        IsDefault = $isDefault
+                        Items     = $items
                     })
                 }
-                $authData['HidGroups'].Add([PSCustomObject]@{ GroupName=$grpName; Items=$items })
             }
         } catch { }
     }
@@ -1192,12 +1199,17 @@ function Build-AuthHtml {
     }
 
     # --- Access Permissions ---
+    # Positions in cas||securitypolicysids: 0=Admin, 1=Accounts, 2=Print Distribution, 3=Reports
     $html += AG 'Access Permissions'
     $sidRows = ''
-    if ($ad -and $ad['SecurityPolicySids'] -and $ad['SecurityPolicySids'].Count -gt 0) {
-        $i = 1
-        foreach ($s in $ad['SecurityPolicySids']) { $sidRows += ARow "Admin Group $i" $s; $i++ }
-    } else { $sidRows += ARow 'Security Policy Groups' '(not set)' }
+    $sids = if ($ad -and $ad['SecurityPolicySids']) { $ad['SecurityPolicySids'] } else { @() }
+    $permLabels = @('Admin', 'Accounts', 'Print Distribution', 'Reports')
+    $permIdx    = @(0, 1, 2, 3)
+    for ($pi = 0; $pi -lt 4; $pi++) {
+        $idx = $permIdx[$pi]
+        $val = if ($sids.Count -gt $idx) { $sids[$idx] } else { '(not set)' }
+        $sidRows += ARow $permLabels[$pi] $val
+    }
     $html += ATable $sidRows
 
     # --- External Authentication ---
@@ -1265,23 +1277,31 @@ function Build-AuthHtml {
     # HID Groups sub-table
     if ($ad -and $ad['HidGroups'] -and $ad['HidGroups'].Count -gt 0) {
         foreach ($grp in $ad['HidGroups']) {
-            $html += "<div class='sub'>HID Group: $(HE $grp.GroupName)</div>"
-            $hidRows = ''
-            foreach ($item in $grp.Items) {
-                $usePin = switch ($item.UseAsPIN) { 'FacID' {'Facility ID as PIN'} 'CardID' {'Card ID as PIN'} 'Both' {'Both'} default { HE $item.UseAsPIN } }
-                $hidRows += ARow 'Facility: Start Bit'   $item.FacStart
-                $hidRows += ARow 'Facility: End Bit'     $item.FacEnd
-                $hidRows += ARow 'Facility: Width'       $item.FacWidth
-                $hidRows += ARow 'Facility: Match Value' $item.FacMatch
-                $hidRows += ARow 'Use As PIN'            $usePin
-                $hidRows += ARow 'ID: Start Bit'         $item.IDStart
-                $hidRows += ARow 'ID: End Bit'           $item.IDEnd
-                $hidRows += ARow 'ID: Width'             $item.IDWidth
+            $defLabel = if ($grp.IsDefault) { ' &nbsp;<small style="font-weight:normal;color:#888">(Default)</small>' } else { '' }
+            $html += "<div class='sub'>HID Group: $(HE $grp.GroupName)$defLabel</div>"
+            if ($grp.Items.Count -gt 0) {
+                $html += "<table class='kv hid-tbl'><thead><tr>"
+                $html += "<th>Facility Code<br><small>start,end,width</small></th>"
+                $html += "<th>Matching Facility Code</th>"
+                $html += "<th>Include Fac. in PIN</th>"
+                $html += "<th>ID Code<br><small>start,end,width</small></th>"
+                $html += "</tr></thead><tbody>"
+                foreach ($item in $grp.Items) {
+                    $pinCls = if ($item.FacInPIN -eq 'Yes') { ' style="color:#27ae60;font-weight:500"' } else { '' }
+                    $html += "<tr>"
+                    $html += "<td>$(HE $item.FacCode)</td>"
+                    $html += "<td>$(HE $item.FacMatch)</td>"
+                    $html += "<td$pinCls>$(HE $item.FacInPIN)</td>"
+                    $html += "<td>$(HE $item.IDCode)</td>"
+                    $html += "</tr>"
+                }
+                $html += "</tbody></table>"
+            } else {
+                $html += "<p style='color:#aaa;font-size:11px;margin:4px 0 8px'>No decoding items configured.</p>"
             }
-            $html += ATable $hidRows
         }
     } else {
-        $html += "<div class='sub'>HID Decoding Groups</div><table class='kv'><tr><td class='k'>HID Parameters</td><td class='v e'>(not set)</td></tr></table>"
+        $html += "<div class='sub'>HID Decoding Groups</div><p style='color:#aaa;font-size:11px;margin:4px 0 8px'>(not set)</p>"
     }
 
     # --- CAS Offline Behavior ---
@@ -1699,6 +1719,10 @@ table.kv .v.e{color:#bbb;font-style:italic}
 .sub{margin-top:10px;margin-bottom:5px;font-size:11px;font-weight:bold;color:#666;text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid #eee;padding-bottom:3px}
 .inst-hdr{margin-top:14px;margin-bottom:6px;padding:7px 12px;background:#1a2744;color:#fff;border-radius:5px;font-size:12px;font-weight:bold;letter-spacing:.4px}
 .auth-grp{margin-top:12px;margin-bottom:6px;padding:5px 10px;background:#eef2ff;border-left:3px solid #1a56db;border-radius:0 4px 4px 0;font-size:11px;font-weight:bold;color:#1a3a8a;text-transform:uppercase;letter-spacing:.3px}
+table.hid-tbl{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:6px}
+table.hid-tbl th{background:#f0f4f8;color:#555;font-size:10px;text-transform:uppercase;letter-spacing:.3px;padding:5px 10px;border:1px solid #e0e4ea;text-align:left;font-weight:600}
+table.hid-tbl td{padding:5px 10px;border:1px solid #e0e4ea;color:#111;vertical-align:top}
+table.hid-tbl tr:nth-child(even) td{background:#fafbfc}
 pre#rawpre{background:#1e1e1e;color:#d4d4d4;padding:14px;border-radius:6px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all}
 mark{background:#ffd600;color:#000;border-radius:2px}
 .hi{display:none!important}
