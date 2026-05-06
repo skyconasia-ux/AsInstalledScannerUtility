@@ -866,7 +866,7 @@ function Collect-Data {
     $netData = @{
         UpgradeMode    = EV 'cas||csupgrademode'
         DomainQualif   = EV 'cas||upnisdomainqualified'
-        DefaultDomain  = EV 'dce||defaultdomainqualif'
+        DefaultDomain  = EV 'cas||domainqualif'
         SmtpList       = [System.Collections.Generic.List[object]]::new()
         SnmpList       = [System.Collections.Generic.List[object]]::new()
     }
