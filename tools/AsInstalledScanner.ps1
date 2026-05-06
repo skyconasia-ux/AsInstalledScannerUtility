@@ -145,6 +145,7 @@ $WatchedKeys = @(
 # Section display names (ordered)
 $SectionMeta = [ordered]@{
     auth     = 'Authentication'
+    network  = 'Global Network Settings'
     smtp     = 'SMTP / Email'
     job      = 'Job Management'
     quota    = 'Quotas and Messages'
@@ -861,25 +862,122 @@ function Collect-Data {
         } catch { }
     }
 
+    # --- Network data collection ---
+    $netData = @{
+        UpgradeMode    = EV 'cas||csupgrademode'
+        DomainQualif   = EV 'cas||upnisdomainqualified'
+        DefaultDomain  = EV 'dce||defaultdomainqualif'
+        SmtpList       = [System.Collections.Generic.List[object]]::new()
+        SnmpList       = [System.Collections.Generic.List[object]]::new()
+    }
+
+    # Parse default SMTP server (cas||smtpauthenticationsec)
+    function Parse-SmtpXml { param([string]$xml,[string]$fallbackName)
+        if (-not $xml) { return $null }
+        try {
+            $x = [xml]$xml
+            $r = $x.DocumentElement
+            $addr = if ($r.address) { $r.address } else { '' }
+            $srv=''; $port=''
+            if ($addr -match '^(.+):(\d+)$') { $srv=$Matches[1]; $port=$Matches[2] }
+            else { $srv=$addr }
+            $title = if ($r.title -and $r.title.Trim()) { $r.title.Trim() } else { $fallbackName }
+            return [PSCustomObject]@{
+                Name     = $title
+                Server   = $srv
+                Port     = $port
+                TLS      = ($r.isenablessl -eq '-1')
+                MailFrom = if ($r.mailfrom)  { $r.mailfrom }  else { '' }
+                AuthUser = if ($r.user)      { $r.user }      else { '' }
+                AuthPass = if ($r.password -and $r.password.Trim()) { 'Configured' } else { 'Not configured' }
+                BasicAuth= ($r.user -or ($r.password -and $r.password.Trim()))
+            }
+        } catch { return $null }
+    }
+    $defSmtp = Parse-SmtpXml (EV 'cas||smtpauthenticationsec') '<Default>'
+    if ($defSmtp) { $netData['SmtpList'].Add($defSmtp) }
+    # Additional SMTP servers (cas||smtpservers)
+    $smtpSrvXml = EV 'cas||smtpservers'
+    if ($smtpSrvXml -and $smtpSrvXml -notmatch '^\s*<servers\s*/>\s*$' -and $smtpSrvXml -notmatch '<servers>\s*</servers>') {
+        try {
+            $sx = [xml]$smtpSrvXml
+            $i = 0
+            while ($true) {
+                $item = $sx.DocumentElement.SelectSingleNode("item$i")
+                if (-not $item) { break }
+                $inner = $item.InnerXml
+                $parsed = Parse-SmtpXml "<smtpdefault>$inner</smtpdefault>" "Server $($i+1)"
+                if ($parsed) { $netData['SmtpList'].Add($parsed) }
+                $i++
+            }
+        } catch { }
+    }
+
+    # Parse SNMP configs (cas||snmpconfigsets)
+    $snmpXml = EV 'cas||snmpconfigsets'
+    if ($snmpXml) {
+        try {
+            $sx = [xml]$snmpXml
+            $root = $sx.DocumentElement
+            # Version is XML schema version (always 0), not polling interval — skipped
+            $csNode = $root.SelectSingleNode('ConfigSets')
+            if ($csNode) {
+                foreach ($cfgNode in $csNode.ChildNodes) {
+                    $eq = $cfgNode.SelectSingleNode('EQSNMP')
+                    if (-not $eq) { continue }
+                    $setName = if ($eq.SetName) { $eq.SetName } else { '' }
+                    # Decode HTML entities in name (&lt;Default&gt; → <Default>)
+                    $setName = $setName -replace '&lt;','<' -replace '&gt;','>' -replace '&amp;','&'
+                    $proto = $eq.SelectSingleNode('Protocol/item0')
+                    $type = if ($proto -and $proto.Type) { $proto.Type } else { '1' }
+                    if ($type -eq '1') {
+                        $commRead  = if ($proto.Community -and $proto.Community.Read  -and $proto.Community.Read.Trim())  { 'Configured' } else { 'Not configured' }
+                        $commWrite = if ($proto.Community -and $proto.Community.Write -and $proto.Community.Write.Trim()) { 'Configured' } else { 'Not configured' }
+                        $netData['SnmpList'].Add([PSCustomObject]@{
+                            Name=''; SetName=$setName; Version='v1/v2c'
+                            CommunityRead=$commRead; CommunityWrite=$commWrite
+                            SecName=''; CtxName=''; AuthProto=''; AuthKey=''; PrivProto=''; PrivKey=''
+                        })
+                    } else {
+                        $secName  = if ($proto.SecurityName)  { $proto.SecurityName  } else { '' }
+                        $ctxName  = if ($proto.ContextName)   { $proto.ContextName   } else { '' }
+                        $authProt = if ($proto.AuthProtocol)  { $proto.AuthProtocol  } else { '' }
+                        $authKey  = if ($proto.AuthKey  -and $proto.AuthKey.Trim())  { 'Configured' } else { 'Not configured' }
+                        $privProt = if ($proto.PrivProtocol)  { $proto.PrivProtocol  } else { '' }
+                        $privKey  = if ($proto.PrivKey  -and $proto.PrivKey.Trim())  { 'Configured' } else { 'Not configured' }
+                        $netData['SnmpList'].Add([PSCustomObject]@{
+                            Name=''; SetName=$setName; Version='v3'
+                            CommunityRead=''; CommunityWrite=''
+                            SecName=$secName; CtxName=$ctxName
+                            AuthProto=$authProt; AuthKey=$authKey
+                            PrivProto=$privProt; PrivKey=$privKey
+                        })
+                    }
+                }
+            }
+        } catch { }
+    }
+
     return [PSCustomObject]@{
-        Hostname   = $hostname
-        AppName    = $AppName
-        Timestamp  = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-        Components = $components
-        KeyValues  = $keyValues
-        PriceLists = $priceLists
-        Workflows  = $workflows
-        WFolders   = $wfFolders
-        PullGroups = $pullGroups
-        Users      = $users
-        SmtpServer = $smtpSrv
-        SmtpPort   = $smtpPort
-        Currency   = (EV 'cas||currencyiso4217')
-        LicenseHost= (EV 'cas||fneserverhost')
-        DceMap     = $script:dce
-        DreMap     = $script:dre
-        WinData    = $winData
-        AuthData   = $authData
+        Hostname    = $hostname
+        AppName     = $AppName
+        Timestamp   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        Components  = $components
+        KeyValues   = $keyValues
+        PriceLists  = $priceLists
+        Workflows   = $workflows
+        WFolders    = $wfFolders
+        PullGroups  = $pullGroups
+        Users       = $users
+        SmtpServer  = $smtpSrv
+        SmtpPort    = $smtpPort
+        Currency    = (EV 'cas||currencyiso4217')
+        LicenseHost = (EV 'cas||fneserverhost')
+        DceMap      = $script:dce
+        DreMap      = $script:dre
+        WinData     = $winData
+        AuthData    = $authData
+        NetData     = $netData
     }
 }
 
@@ -1416,6 +1514,114 @@ function Build-AuthHtml {
 }
 
 # ============================================================
+# GLOBAL NETWORK SETTINGS HTML
+# ============================================================
+function Build-NetworkHtml {
+    param([object]$data)
+    $nd  = $data.NetData
+    $html = ''
+
+    function NG  { param([string]$t) "<div class='auth-grp'>$t</div>" }
+    function NRow{ param([string]$k,[string]$v)
+        $ec = if (-not $v -or $v -eq '(not set)') { ' e' } else { '' }
+        "<tr><td class='k'>$(HE $k)</td><td class='v$ec'>$(HE $v)</td></tr>"
+    }
+    function NTable { param([string]$body) "<table class='kv'>$body</table>" }
+    function NRS1   { param([string]$k,[string]$v) "<tr><td class='k sub1'>$(HE $k)</td><td class='v'>$v</td></tr>" }
+    function NOn    { param([string]$v,[string]$t='-1') if ($v -eq $t -or $v -eq '1') { "<span class='dc-on'>Enabled</span>" } else { "<span class='dc-off'>Disabled</span>" } }
+    function NCB    { param([bool]$on) if ($on) { "<span class='eq-on'>&#9745; Yes</span>" } else { "<span class='eq-off'>&#9744; No</span>" } }
+    function NMask  { param([string]$v) if ($v -eq 'Configured') { "<span style='color:#555'>&#11044;&#11044;&#11044;&#11044;&#11044;&#11044; <small style='color:#888'>(configured)</small></span>" } else { "<span class='dc-off'>Not configured</span>" } }
+
+    # 1. Backward Compatibility
+    $html += NG 'Backward Compatibility'
+    $vUpgrade = if ($nd['UpgradeMode'] -eq '1') { 'Enabled' } else { 'Disabled' }
+    $html += NTable (NRow 'Enable "upgrade mode"' $vUpgrade)
+
+    # 2. Domain Qualification
+    $html += NG 'Domain Qualification'
+    $dqOn = ($nd['DomainQualif'] -eq '-1' -or $nd['DomainQualif'] -eq '1')
+    $vDqOn = if ($dqOn) { "<span class='dc-on'>Enabled</span>" } else { "<span class='dc-off'>Disabled</span>" }
+    $dqHtml = "<table class='kv'>"
+    $dqHtml += "<tr><td class='k'>Qualify all user IDs with NT domain information</td><td class='v'>$vDqOn</td></tr>"
+    if ($dqOn) {
+        $dd = if ($nd['DefaultDomain']) { $nd['DefaultDomain'] } else { '(not set)' }
+        $dqHtml += NRS1 'Default domain for unqualified user IDs' (HE $dd)
+    }
+    $dqHtml += '</table>'
+    $html += $dqHtml
+
+    # 3. SMTP Mail Server
+    $html += NG 'SMTP Mail Server'
+    if ($nd['SmtpList'].Count -eq 0) {
+        $html += "<p style='color:#aaa;padding:8px;font-size:12px'>No SMTP servers configured.</p>"
+    } else {
+        # Summary table
+        $smtpTbl  = "<table class='net-tbl'><thead><tr><th>Connection name</th><th>SMTP Mail Server</th></tr></thead><tbody>"
+        foreach ($s in $nd['SmtpList']) { $smtpTbl += "<tr><td>$(HE $s.Name)</td><td>$(HE $s.Server)</td></tr>" }
+        $smtpTbl += '</tbody></table>'
+        $html += $smtpTbl
+        # Detail cards
+        foreach ($s in $nd['SmtpList']) {
+            $vBasicAuth = if ($s.BasicAuth) { "<span class='dc-on'>Enabled</span>" }  else { "<span class='dc-off'>Disabled</span>" }
+            $vAuthUser  = if ($s.AuthUser) { HE $s.AuthUser } else { '(not set)' }
+            $html += "<details class='net-detail'><summary>$(HE $s.Name)</summary>"
+            $html += "<table class='kv'>"
+            $html += NRow 'Connection name'                                    $s.Name
+            $html += NRow 'SMTP Email server (DNS name or IP address)'         $s.Server
+            $html += NRow 'SMTP Email server port'                             $s.Port
+            $html += "<tr><td class='k'>Enable TLS</td><td class='v'>$(NCB $s.TLS)</td></tr>"
+            $html += NRow 'Mail From address for system generated messages'    $s.MailFrom
+            $html += "<tr><td class='k'>Basic Authentication</td><td class='v'>$vBasicAuth</td></tr>"
+            if ($s.BasicAuth) {
+                $html += NRS1 'User Name' $vAuthUser
+                $html += "<tr><td class='k sub1'>Password</td><td class='v'>$(NMask $s.AuthPass)</td></tr>"
+            }
+            $html += '</table></details>'
+        }
+    }
+
+    # 4. SNMP Configuration
+    $html += NG 'SNMP Configuration'
+    if ($nd['SnmpList'].Count -eq 0) {
+        $html += "<p style='color:#aaa;padding:8px;font-size:12px'>No SNMP configurations found.</p>"
+    } else {
+        $snmpTbl  = "<table class='net-tbl'><thead><tr><th>SNMP configuration name</th><th>Version</th></tr></thead><tbody>"
+        foreach ($s in $nd['SnmpList']) { $snmpTbl += "<tr><td>$(HE $s.SetName)</td><td>$(HE $s.Version)</td></tr>" }
+        $snmpTbl += '</tbody></table>'
+        $html += $snmpTbl
+        foreach ($s in $nd['SnmpList']) {
+            $html += "<details class='net-detail'><summary>$(HE $s.SetName)</summary>"
+            $html += "<table class='kv'>"
+            if ($s.Version -eq 'v1/v2c') {
+                $html += "<tr><td class='k'>Enable SNMP v1/2c</td><td class='v'><span class='dc-on'>Enabled</span></td></tr>"
+                $html += "<tr><td colspan='2' class='sec-lbl'>Community</td></tr>"
+                $html += NRS1 'Get (read)'  (NMask $s.CommunityRead)
+                $html += NRS1 'Set (write)' (NMask $s.CommunityWrite)
+            } else {
+                $vSecName  = if ($s.SecName)  { HE $s.SecName  } else { '(not set)' }
+                $vCtxName  = if ($s.CtxName)  { HE $s.CtxName  } else { '(not set)' }
+                $vAuthProt = if ($s.AuthProto) { HE $s.AuthProto } else { '(not set)' }
+                $vPrivProt = if ($s.PrivProto) { HE $s.PrivProto } else { '(not set)' }
+                $html += "<tr><td class='k'>Enable SNMP v3</td><td class='v'><span class='dc-on'>Enabled</span></td></tr>"
+                $html += "<tr><td colspan='2' class='sec-lbl'>Security</td></tr>"
+                $html += NRS1 'Name' $vSecName
+                $html += "<tr><td colspan='2' class='sec-lbl'>Context</td></tr>"
+                $html += NRS1 'Name' $vCtxName
+                $html += "<tr><td colspan='2' class='sec-lbl'>Authentication</td></tr>"
+                $html += "<tr><td class='k sub1'>Key</td><td class='v'>$(NMask $s.AuthKey)</td></tr>"
+                $html += NRS1 'Protocol' $vAuthProt
+                $html += "<tr><td colspan='2' class='sec-lbl'>Privacy</td></tr>"
+                $html += "<tr><td class='k sub1'>Key</td><td class='v'>$(NMask $s.PrivKey)</td></tr>"
+                $html += NRS1 'Protocol' $vPrivProt
+            }
+            $html += '</table></details>'
+        }
+    }
+
+    return $html
+}
+
+# ============================================================
 # WRITE HTML REPORT
 # ============================================================
 function Write-HtmlReport {
@@ -1699,6 +1905,10 @@ function Write-HtmlReport {
             $keyHtml += New-HtmlSection $sec $SectionMeta[$sec] (Build-AuthHtml $data)
             continue
         }
+        if ($sec -eq 'network') {
+            $keyHtml += New-HtmlSection $sec $SectionMeta[$sec] (Build-NetworkHtml $data)
+            continue
+        }
         $rows = [System.Collections.Generic.List[object]]::new()
         foreach ($wk in ($WatchedKeys | Where-Object { $_.Section -eq $sec })) {
             $raw = FV $data.KeyValues[$wk.Key] 300
@@ -1830,6 +2040,15 @@ table.kv td.sec-lbl{font-size:10px;font-weight:700;color:#3a4a6a;text-transform:
 .dc-off{color:#888}
 .eq-on{color:#1a6d1a}
 .eq-off{color:#9ea5b0}
+table.net-tbl{width:100%;border-collapse:collapse;font-size:12px;margin:6px 0 10px}
+table.net-tbl th{background:#eef3fb;color:#3a4a6a;font-size:10px;text-transform:uppercase;letter-spacing:.3px;padding:6px 10px;border:1px solid #d4dff0;text-align:left;font-weight:700}
+table.net-tbl td{padding:5px 10px;border:1px solid #e8edf6;color:#222;font-size:12px}
+table.net-tbl tr:nth-child(even) td{background:#f9fbff}
+details.net-detail{margin:4px 0;border:1px solid #dde4f0;border-radius:4px;overflow:hidden}
+details.net-detail summary{padding:7px 12px;cursor:pointer;font-size:12px;font-weight:600;color:#2a3a6a;background:#f4f7fd;user-select:none}
+details.net-detail summary:hover{background:#eaeff9}
+details.net-detail[open] summary{border-bottom:1px solid #dde4f0}
+details.net-detail table.kv{margin:0}
 pre#rawpre{background:#1e1e1e;color:#d4d4d4;padding:14px;border-radius:6px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all}
 mark{background:#ffd600;color:#000;border-radius:2px}
 .hi{display:none!important}
