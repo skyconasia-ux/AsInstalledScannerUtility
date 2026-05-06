@@ -86,8 +86,10 @@ $WatchedKeys = @(
     @{ Key='dce||hidparameters';                     Label='HID Decoding Parameters (raw XML)'; Section='auth'; IsXml=$true  },
     # Authentication — CAS Offline Behavior
     @{ Key='dce||cacheuserloginofflinettldays';      Label='Login Cache TTL (days, 0=disabled)';Section='auth'; IsXml=$false },
-    @{ Key='dce||supportofflinemode';                Label='Offline Mode';                      Section='auth'; IsXml=$false;
+    @{ Key='dce||supportofflinemode';                Label='Login Caching';                     Section='auth'; IsXml=$false;
        ValueMap=@{'0'='Disabled';'1'='Enabled'} },
+    @{ Key='cas||casdownaction';                     Label='Print Behavior';                    Section='auth'; IsXml=$false;
+       ValueMap=@{'PrintChargeLater'='Print, charge accounts later';'AutoSelect'='Auto select';'DoNotPrint'='Do not print'} },
     # Authentication — Misc
     @{ Key='dce||adminpin';                          Label='Admin PIN';                         Section='auth'; IsXml=$false },
     @{ Key='dce||maxpinlength';                      Label='Max PIN Length';                    Section='auth'; IsXml=$false },
@@ -1357,9 +1359,12 @@ function Build-AuthHtml {
     # --- CAS Offline Behavior ---
     $html += AG 'CAS Offline Behavior'
     $offRows = ''
-    $offRows += ARow 'Offline Mode'              (AVMap $kv['dce||supportofflinemode']          @{'0'='Disabled';'1'='Enabled'})
+    $offRows += ARow 'Login Caching'             (AVMap $kv['dce||supportofflinemode']         @{'0'='Disabled';'1'='Enabled'})
     $offRows += ARow 'Login Cache TTL (days)'    (FV $kv['dce||cacheuserloginofflinettldays']  50)
     $offRows += ARow 'Login Expiry (seconds)'    (FV $kv['cas||loginexpiry']                   50)
+    $vPrint = if ($kv['cas||casdownaction']) { $kv['cas||casdownaction'] } else { '' }
+    $printMap = @{'PrintChargeLater'='Print, charge accounts later';'AutoSelect'='Auto select';'DoNotPrint'='Do not print'}
+    $offRows += ARow 'Print Behavior'            (AVMap $vPrint $printMap)
     $html += ATable $offRows
 
     return $html
