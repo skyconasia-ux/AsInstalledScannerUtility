@@ -619,6 +619,94 @@ function New-KVTable {
 }
 
 # ============================================================
+# REMOTE SERVER DATA COLLECTION
+# ============================================================
+function Collect-RemoteServerData {
+    param([string]$ServerName)
+    # Skip if this is the local machine
+    $localAliases = @($env:COMPUTERNAME, $hostname, 'localhost', '127.0.0.1', '.')
+    foreach ($a in $localAliases) { if ($ServerName -ieq $a) { return @{ IsLocal=$true } } }
+
+    Write-Host "    Remote scan: $ServerName ..." -ForegroundColor Cyan
+    try {
+        $result = Invoke-Command -ComputerName $ServerName -ErrorAction Stop -ScriptBlock {
+            $ErrorActionPreference = 'SilentlyContinue'
+            $cs   = Get-WmiObject Win32_ComputerSystem
+            $os   = Get-WmiObject Win32_OperatingSystem
+            $cpu  = Get-WmiObject Win32_Processor | Select-Object -First 1
+            $bios = Get-WmiObject Win32_BIOS
+            $drives = [System.Collections.Generic.List[object]]::new()
+            Get-WmiObject Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
+                $drives.Add([PSCustomObject]@{
+                    Name=$_.DeviceID; Total=[math]::Round($_.Size/1GB,0)
+                    Free=[math]::Round($_.FreeSpace/1GB,1)
+                    Used=[math]::Round(($_.Size-$_.FreeSpace)/1GB,1)
+                })
+            }
+            $nics = [System.Collections.Generic.List[object]]::new()
+            Get-WmiObject Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True" | ForEach-Object {
+                $nics.Add([PSCustomObject]@{
+                    Desc    = $_.Description
+                    IP      = if ($_.IPAddress)            { $_.IPAddress[0] }             else { '' }
+                    Gateway = if ($_.DefaultIPGateway)     { $_.DefaultIPGateway[0] }      else { '' }
+                    DNS     = if ($_.DNSServerSearchOrder) { $_.DNSServerSearchOrder -join ', ' } else { '' }
+                    DHCP    = if ($_.DHCPEnabled)          { 'Yes' } else { 'No' }
+                    Mac     = $_.MACAddress
+                })
+            }
+            # EQ/CS services
+            $svcs = [System.Collections.Generic.List[object]]::new()
+            Get-Service | Where-Object {
+                $_.Name -match 'EQDce|EQDre|EQDme|EQCas|EQDws|EQSLP|EQSPE|EQSched|Equitrac|ControlSuite'
+            } | ForEach-Object {
+                $svcs.Add([PSCustomObject]@{
+                    Name=$_.Name; Display=$_.DisplayName
+                    Status=[string]$_.Status; StartType=[string]$_.StartType
+                })
+            }
+            # Print queues
+            $printQ = [System.Collections.Generic.List[object]]::new()
+            try {
+                Get-Printer -EA SilentlyContinue | ForEach-Object {
+                    $printQ.Add([PSCustomObject]@{ Name=$_.Name; Driver=$_.DriverName; Port=$_.PortName })
+                }
+            } catch {}
+            # Windows Roles (best-effort, server only)
+            $roles = @()
+            try { $roles = @(Get-WindowsFeature -EA SilentlyContinue | Where-Object Installed | ForEach-Object { $_.DisplayName }) } catch {}
+            # SQL services
+            $sqlSvcs = @(Get-Service -Name 'MSSQL*' -EA SilentlyContinue | ForEach-Object { "$($_.Name) [$($_.Status)]" })
+            $ram = if ($cs) { [math]::Round($cs.TotalPhysicalMemory/1GB,0) } else { 0 }
+            return [PSCustomObject]@{
+                ComputerName = $env:COMPUTERNAME
+                OsName       = if ($os)   { $os.Caption }          else { '' }
+                OsVersion    = if ($os)   { $os.Version }          else { '' }
+                Ram          = "$ram GB"
+                CpuName      = if ($cpu)  { $cpu.Name.Trim() }     else { '' }
+                CpuCores     = if ($cpu)  { [string]$cpu.NumberOfCores } else { '' }
+                Manufacturer = if ($cs)   { $cs.Manufacturer }     else { '' }
+                Model        = if ($cs)   { $cs.Model }            else { '' }
+                DomainName   = if ($cs)   { $cs.Domain }           else { '' }
+                BiosSerial   = if ($bios) { $bios.SerialNumber }   else { '' }
+                Drives       = $drives; Nics=$nics
+                EqServices   = $svcs; PrintQueues=$printQ
+                InstalledRoles=$roles; SqlServices=$sqlSvcs
+            }
+        }
+        return @{ IsLocal=$false; Success=$true; ServerName=$ServerName; Data=$result }
+    } catch {
+        $msg = $_.Exception.Message
+        $reason = 'Remote scan failed'
+        if     ($msg -match 'WS-Management|WinRM|WSMan')             { $reason = 'WinRM unavailable' }
+        elseif ($msg -match '[Aa]ccess.*[Dd]eni|[Uu]nauth|401')      { $reason = 'Permission denied' }
+        elseif ($msg -match '[Tt]imeout|unreachable|[Nn]etwork')      { $reason = 'Offline or network unreachable' }
+        elseif ($msg -match '[Dd][Nn][Ss]|[Rr]esolv|host')           { $reason = 'DNS resolution failed' }
+        Write-Host "    [!] $ServerName : $reason" -ForegroundColor Yellow
+        return @{ IsLocal=$false; Success=$false; ServerName=$ServerName; Error=$reason }
+    }
+}
+
+# ============================================================
 # DATA COLLECTION
 # ============================================================
 function Collect-Data {
@@ -1031,6 +1119,24 @@ function Collect-Data {
     $ldapXml    = Get-CasConfigAttr 'LDAPSettingsDoc'
     $azureAdXml = Get-CasConfigAttr 'AzureADSettingsDoc'
 
+    # Resolve SQL server name (.\SQLExpress -> HOSTNAME\SQLExpress)
+    $sqlSrvResolved = $SqlServer
+    if ($SqlServer -match '^\.' -or $SqlServer -imatch '^localhost') {
+        $instPart = $SqlServer -replace '^\.\\?|^localhost\\?',''
+        $sqlSrvResolved = if ($instPart -and $instPart -ne $SqlServer) { "$hostname\$instPart" } else { $hostname }
+    }
+
+    # EQ/CS services on the local (primary) server
+    $eqSvcs = [System.Collections.Generic.List[object]]::new()
+    Get-Service -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -match 'EQDce|EQDre|EQDme|EQCas|EQDws|EQSLP|EQSPE|EQSched|Equitrac|ControlSuite'
+    } | ForEach-Object {
+        $eqSvcs.Add([PSCustomObject]@{
+            Name=$_.Name; Display=$_.DisplayName
+            Status=[string]$_.Status; StartType=[string]$_.StartType
+        })
+    }
+
     return [PSCustomObject]@{
         Hostname    = $hostname
         AppName     = $AppName
@@ -1056,6 +1162,13 @@ function Collect-Data {
         NetData     = $netData
         LdapXml     = $ldapXml
         AzureAdXml  = $azureAdXml
+        EqServices   = $eqSvcs
+        SqlServerKey = $sqlSrvResolved
+        SqlDbKey     = $SqlDb
+        EnvironmentKey = "$sqlSrvResolved / $SqlDb"
+        # Multi-server fields populated later in Run-After/Run-Full
+        ServerNames  = @()
+        RemoteScans  = @{}
     }
 }
 
@@ -2031,6 +2144,185 @@ function Build-DirSyncHtml {
 }
 
 # ============================================================
+# BUILD MULTI-SERVER ENVIRONMENT HTML
+# ============================================================
+function Build-MultiServerHtml {
+    param($data)
+
+    $serverNames = $data.ServerNames
+    $remoteScans = $data.RemoteScans
+
+    # Component-type to server list - inline (no nested functions to avoid PS5.1 scope issues)
+    $casSvrs = @($data.Components | Where-Object { $_.Name -eq  'CAS'         } | Select-Object -ExpandProperty SystemName -Unique)
+    $dreSvrs = @($data.Components | Where-Object { $_.Name -like 'DRE*'       } | Select-Object -ExpandProperty SystemName -Unique)
+    $dceSvrs = @($data.Components | Where-Object { $_.Name -eq  'DCE'         } | Select-Object -ExpandProperty SystemName -Unique)
+    $dwsSvrs = @($data.Components | Where-Object { $_.Name -eq  'DWS'         } | Select-Object -ExpandProperty SystemName -Unique)
+    $dmeSvrs = @($data.Components | Where-Object { $_.Name -eq  'DME'         } | Select-Object -ExpandProperty SystemName -Unique)
+    $speSvrs = @($data.Components | Where-Object { $_.Name -eq  'SPE'         } | Select-Object -ExpandProperty SystemName -Unique)
+    $slpSvrs = @($data.Components | Where-Object { $_.Name -eq  'SLP'         } | Select-Object -ExpandProperty SystemName -Unique)
+    $webSvrs = @($data.Components | Where-Object { $_.Name -like '*Web Client*'} | Select-Object -ExpandProperty SystemName -Unique)
+    $schSvrs = @($data.Components | Where-Object { $_.Name -like '*Scheduler*' } | Select-Object -ExpandProperty SystemName -Unique)
+
+    # Build topology rows - scriptblock to avoid nested function scope issues
+    $MkTopoRow = {
+        param([string]$role, [array]$svrs)
+        if ($svrs.Count -eq 0) { return '' }
+        $sl = ($svrs | ForEach-Object { "<span class='topo-srv'>$(HE $_)</span>" }) -join ' '
+        "<tr><td class='topo-role'>$(HE $role)</td><td class='topo-srvs'>$sl</td></tr>"
+    }
+    $topoRows  = & $MkTopoRow 'CAS Server'          $casSvrs
+    $topoRows += & $MkTopoRow 'DRE / Print Server'  $dreSvrs
+    $topoRows += & $MkTopoRow 'DCE Server'           $dceSvrs
+    $topoRows += & $MkTopoRow 'DWS Server'           $dwsSvrs
+    $topoRows += & $MkTopoRow 'DME Server'           $dmeSvrs
+    $topoRows += & $MkTopoRow 'SPE Server'           $speSvrs
+    $topoRows += & $MkTopoRow 'SLP Server'           $slpSvrs
+    $topoRows += & $MkTopoRow 'Web Client Server'    $webSvrs
+    $topoRows += & $MkTopoRow 'Scheduler'            $schSvrs
+    if ($data.SqlServerKey) {
+        $topoRows += "<tr><td class='topo-role'>SQL Server</td><td class='topo-srvs'>" +
+                     "<span class='topo-srv topo-sql'>$(HE $data.SqlServerKey)</span>" +
+                     " <small class='topo-db'>/ $(HE $data.SqlDbKey)</small>" +
+                     " <span class='topo-src'>(CAS config)</span></td></tr>"
+    }
+    $topoTable = "<table class='topo-tbl'>$topoRows</table>"
+
+    # Per-server collapsible cards
+    $srvCardsHtml = ''
+    foreach ($sn in $serverNames) {
+        $srvId   = "srv-$($sn -replace '[^a-zA-Z0-9]','-')"
+        $scan    = if ($remoteScans.ContainsKey($sn)) { $remoteScans[$sn] } else { $null }
+        $isLocal = ($scan -and $scan.IsLocal) -or ($sn -ieq $data.Hostname)
+
+        # Status badge
+        $badge = if ($isLocal) {
+            "<span class='srv-badge srv-local'>Primary</span>"
+        } elseif (-not $scan) {
+            "<span class='srv-badge srv-unknown'>Not Scanned</span>"
+        } elseif ($scan.Success) {
+            "<span class='srv-badge srv-ok'>WinRM OK</span>"
+        } else {
+            "<span class='srv-badge srv-fail'>$(HE $scan.Error)</span>"
+        }
+
+        # Components table for this server
+        $srvComps = @($data.Components | Where-Object { $_.SystemName -eq $sn })
+        $compHtml = ''
+        if ($srvComps.Count -gt 0) {
+            $compHtml = "<div class='srv-sect-hdr'>Installed Components ($($srvComps.Count))</div>"
+            $compHtml += "<table class='comp-tbl'><tr class='comp-th'><th>Component</th><th>Version</th><th>Last Used</th></tr>"
+            foreach ($c in $srvComps) {
+                $cn = HE $c.Name
+                if ($c.ExtraInfo) { $cn += " <span class='comp-extra'>($(HE $c.ExtraInfo))</span>" }
+                $compHtml += "<tr><td>$cn</td><td class='comp-ver'>$(HE $c.Version)</td><td class='comp-date'>$(HE $c.LastUsed)</td></tr>"
+            }
+            $compHtml += "</table>"
+        }
+
+        # System / services / print detail
+        $detailHtml = ''
+        if ($isLocal -and $data.WinData) {
+            $wd = $data.WinData
+            $detailHtml += "<div class='srv-sect-hdr'>System</div><table class='kv'>"
+            $detailHtml += "<tr><td class='k'>OS</td><td class='v'>$(HE $wd.OsName)</td></tr>"
+            $detailHtml += "<tr><td class='k'>RAM</td><td class='v'>$(HE $wd.Ram)</td></tr>"
+            $detailHtml += "<tr><td class='k'>CPU</td><td class='v'>$(HE $wd.CpuName)</td></tr>"
+            if ($wd.DomainName) { $detailHtml += "<tr><td class='k'>Domain</td><td class='v'>$(HE $wd.DomainName)</td></tr>" }
+            foreach ($dr in $wd.Drives) {
+                $detailHtml += "<tr><td class='k'>Drive $($dr.Name)</td><td class='v'>$($dr.Total) GB total / $($dr.Free) GB free</td></tr>"
+            }
+            $detailHtml += "</table>"
+
+            if ($data.EqServices -and $data.EqServices.Count -gt 0) {
+                $detailHtml += "<div class='srv-sect-hdr'>EQ Services ($($data.EqServices.Count))</div><table class='kv'>"
+                foreach ($sv in $data.EqServices) {
+                    $sc = if ($sv.Status -eq 'Running') { "color:#27ae60" } else { "color:#e74c3c" }
+                    $detailHtml += "<tr><td class='k'>$(HE $sv.Display)</td><td class='v'><span style='$sc'>$(HE $sv.Status)</span></td></tr>"
+                }
+                $detailHtml += "</table>"
+            }
+
+            if ($wd.PrintQueues -and $wd.PrintQueues.Count -gt 0) {
+                $shown = [math]::Min($wd.PrintQueues.Count, 10)
+                $detailHtml += "<div class='srv-sect-hdr'>Print Queues ($($wd.PrintQueues.Count))</div><table class='kv'>"
+                $wd.PrintQueues | Select-Object -First 10 | ForEach-Object {
+                    $detailHtml += "<tr><td class='k'>$(HE $_.Name)</td><td class='v'>$(HE $_.DriverName)</td></tr>"
+                }
+                if ($wd.PrintQueues.Count -gt 10) { $detailHtml += "<tr><td colspan='2' style='font-size:11px;color:#888;padding:4px 8px'>...and $($wd.PrintQueues.Count-10) more. See Print Queues section.</td></tr>" }
+                $detailHtml += "</table>"
+            }
+
+            if ($wd.SqlInstances -and $wd.SqlInstances.Count -gt 0) {
+                $detailHtml += "<div class='srv-sect-hdr'>SQL Server</div><table class='kv'>"
+                foreach ($si in $wd.SqlInstances) {
+                    $detailHtml += "<tr><td class='k'>$(HE $si.Name)</td><td class='v'>$(HE $si.Edition) [$(HE $si.Status)]</td></tr>"
+                }
+                $detailHtml += "</table>"
+            }
+
+            $detailHtml += "<p style='font-size:11px;color:#888;margin-top:8px;padding:4px 0'>Full Windows detail in sections below (System Identity, OS, Hardware, etc.)</p>"
+
+        } elseif ($scan -and $scan.Success -and $scan.Data) {
+            $rd = $scan.Data
+            $detailHtml += "<div class='srv-sect-hdr'>System</div><table class='kv'>"
+            $detailHtml += "<tr><td class='k'>OS</td><td class='v'>$(HE $rd.OsName)</td></tr>"
+            $detailHtml += "<tr><td class='k'>RAM</td><td class='v'>$(HE $rd.Ram)</td></tr>"
+            $detailHtml += "<tr><td class='k'>CPU</td><td class='v'>$(HE $rd.CpuName)</td></tr>"
+            if ($rd.DomainName) { $detailHtml += "<tr><td class='k'>Domain</td><td class='v'>$(HE $rd.DomainName)</td></tr>" }
+            foreach ($dr in $rd.Drives) {
+                $detailHtml += "<tr><td class='k'>Drive $($dr.Name)</td><td class='v'>$($dr.Total) GB total / $($dr.Free) GB free</td></tr>"
+            }
+            $detailHtml += "</table>"
+
+            if ($rd.EqServices -and $rd.EqServices.Count -gt 0) {
+                $detailHtml += "<div class='srv-sect-hdr'>EQ Services ($($rd.EqServices.Count))</div><table class='kv'>"
+                foreach ($sv in $rd.EqServices) {
+                    $sc = if ($sv.Status -eq 'Running') { "color:#27ae60" } else { "color:#e74c3c" }
+                    $detailHtml += "<tr><td class='k'>$(HE $sv.Display)</td><td class='v'><span style='$sc'>$(HE $sv.Status)</span></td></tr>"
+                }
+                $detailHtml += "</table>"
+            }
+
+            if ($rd.PrintQueues -and $rd.PrintQueues.Count -gt 0) {
+                $detailHtml += "<div class='srv-sect-hdr'>Print Queues ($($rd.PrintQueues.Count))</div><table class='kv'>"
+                $rd.PrintQueues | Select-Object -First 10 | ForEach-Object {
+                    $detailHtml += "<tr><td class='k'>$(HE $_.Name)</td><td class='v'>$(HE $_.Driver)</td></tr>"
+                }
+                if ($rd.PrintQueues.Count -gt 10) { $detailHtml += "<tr><td colspan='2' style='font-size:11px;color:#888;padding:4px 8px'>...and $($rd.PrintQueues.Count-10) more</td></tr>" }
+                $detailHtml += "</table>"
+            }
+
+            if ($rd.SqlServices -and $rd.SqlServices.Count -gt 0) {
+                $detailHtml += "<div class='srv-sect-hdr'>SQL Services</div><table class='kv'>"
+                foreach ($ss in $rd.SqlServices) {
+                    $detailHtml += "<tr><td class='k' colspan='2' style='font-weight:normal'>$(HE $ss)</td></tr>"
+                }
+                $detailHtml += "</table>"
+            }
+
+        } elseif ($scan -and -not $scan.Success) {
+            $detailHtml += "<div class='srv-scan-fail'>&#9888; Remote scan not available: $(HE $scan.Error)</div>"
+            $detailHtml += "<p style='color:#888;font-size:11px;padding:4px 0'>Component data from cas_installedsoftware only. Windows details, services, and registry unavailable.</p>"
+        }
+
+        $srvCardsHtml += "<div class='srv-card'>" +
+            "<div class='srv-card-hdr' onclick=""tog('$srvId')"">" +
+            "<span style='font-size:14px'>&#128187;</span>" +
+            " <span class='srv-name'>$(HE $sn)</span>" +
+            " $badge <span class='tok' id='t-$srvId'>+</span></div>" +
+            "<div class='srv-card-body hide' id='b-$srvId'>$compHtml$detailHtml</div></div>"
+    }
+
+    $body = "<div class='env-key-row'>&#127760; <strong>$(HE $data.EnvironmentKey)</strong></div>" +
+            "<div class='sub' style='margin-top:14px;margin-bottom:6px'>Component Topology</div>" +
+            $topoTable +
+            "<div class='sub' style='margin-top:14px;margin-bottom:6px'>Servers ($($serverNames.Count) detected)</div>" +
+            $srvCardsHtml
+
+    return New-HtmlSection 'multi-server' "Environment &amp; Servers ($($serverNames.Count))" $body
+}
+
+# ============================================================
 # WRITE HTML REPORT
 # ============================================================
 function Write-HtmlReport {
@@ -2049,7 +2341,9 @@ function Write-HtmlReport {
     }
 
     # --- Sidebar nav ---
-    $nav  = "<div class='grp'>Windows Server</div>"
+    $nav  = "<div class='grp'>Environment</div>"
+    $nav += "<a href='#s-multi-server'>Environment &amp; Servers</a>"
+    $nav += "<div class='grp'>Windows Server (Primary)</div>"
     $nav += "<a href='#s-win-system'>System Identity</a>"
     $nav += "<a href='#s-win-os'>Operating System</a>"
     $nav += "<a href='#s-win-hw'>Hardware &amp; Storage</a>"
@@ -2072,6 +2366,19 @@ function Write-HtmlReport {
 
     # --- Summary cards ---
     $smtp = if ($data.SmtpServer) { "$($data.SmtpServer):$($data.SmtpPort)" } else { 'Not set' }
+    # Environment / multi-server tiles
+    $srvNames2 = $data.ServerNames
+    $srvCount2 = $srvNames2.Count
+    $casCnt2 = @($data.Components | Where-Object { $_.Name -eq 'CAS'  } | Select-Object -ExpandProperty SystemName -Unique).Count
+    $dreCnt2 = @($data.Components | Where-Object { $_.Name -match '^DRE' } | Select-Object -ExpandProperty SystemName -Unique).Count
+    $dceCnt2 = @($data.Components | Where-Object { $_.Name -eq 'DCE'  } | Select-Object -ExpandProperty SystemName -Unique).Count
+    $dwsCnt2 = @($data.Components | Where-Object { $_.Name -eq 'DWS'  } | Select-Object -ExpandProperty SystemName -Unique).Count
+    $envCards  = "<div class='scard sc-srv'><div class='lbl'>Total Servers</div><div class='val'>$srvCount2</div></div>"
+    $envCards += "<div class='scard sc-srv'><div class='lbl'>CAS Servers</div><div class='val'>$casCnt2</div></div>"
+    $envCards += "<div class='scard sc-srv'><div class='lbl'>DRE Servers</div><div class='val'>$dreCnt2</div></div>"
+    $envCards += "<div class='scard sc-srv'><div class='lbl'>DCE Servers</div><div class='val'>$dceCnt2</div></div>"
+    $envCards += "<div class='scard sc-srv'><div class='lbl'>DWS Servers</div><div class='val'>$dwsCnt2</div></div>"
+    $envCards += "<div class='scard sc-srv'><div class='lbl'>SQL Server</div><div class='val'>$(HE $data.SqlServerKey)</div></div>"
     $winCards  = "<div class='scard sc-win'><div class='lbl'>Platform</div><div class='val'>$(HE $data.WinData.Platform)</div></div>"
     $winCards += "<div class='scard sc-win'><div class='lbl'>OS</div><div class='val'>$(HE ($data.WinData.OsName -replace 'Windows Server ','WS '))</div></div>"
     $winCards += "<div class='scard sc-win'><div class='lbl'>RAM</div><div class='val'>$(HE $data.WinData.Ram)</div></div>"
@@ -2091,7 +2398,8 @@ function Write-HtmlReport {
     $acctCards += "<div class='scard sc-eq'><div class='lbl'>Accounts with Alternate PIN</div><div class='val'>$($data.PinStats.WithAltPin)</div></div>"
     $acctCards += "<div class='scard sc-eq scard-warn'><div class='lbl'>Accounts with Secondary PIN</div><div class='val val-warn' title='Secondary PIN uses a default sentinel hash on every row in this EQ version - reliable detection not possible'>Unable to verify &#9432;</div></div>"
     $acctCards += "<div class='scard sc-eq'><div class='lbl'>Accounts with Any PIN <span style=''>(excl. Secondary)</span></div><div class='val'>$($data.PinStats.WithAnyPin)</div></div>"
-    $cardsHtml = "<div class='srow-lbl'>Windows Server</div><div class='sgrid'>$winCards</div>" +
+    $cardsHtml = "<div class='srow-lbl'>Environment</div><div class='sgrid'>$envCards</div>" +
+                 "<div class='srow-lbl' style='margin-top:8px'>Windows Server (Primary)</div><div class='sgrid'>$winCards</div>" +
                  "<div class='srow-lbl' style='margin-top:8px'>ControlSuite</div><div class='sgrid'>$eqCards</div>" +
                  "<div class='srow-lbl' style='margin-top:8px'>Accounts</div><div class='sgrid'>$acctCards</div>"
 
@@ -2428,7 +2736,8 @@ function Write-HtmlReport {
     }
     $eqSection = New-HtmlSection 'eqvar' 'Full EQVar Configuration (DCE_config.db3)' $eqBody
 
-    $formatted = $winHtml + $compSection + $keyHtml + $pricingSection + $wfSection + $pgSection + $userSection + $eqSection
+    $multiSection = Build-MultiServerHtml $data
+    $formatted = $multiSection + $winHtml + $compSection + $keyHtml + $pricingSection + $wfSection + $pgSection + $userSection + $eqSection
 
     # Build CSS and JS inline
     $css = @'
@@ -2539,6 +2848,32 @@ mark{background:#ffd600;color:#000;border-radius:2px}
 .srow-lbl{font-size:10px;font-weight:bold;color:#6ab;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
 .sc-win{background:rgba(100,180,255,.12)!important;border-left:2px solid #4fa8e8}
 .sc-eq{background:rgba(255,200,100,.10)!important;border-left:2px solid #e8a84f}
+.sc-srv{background:rgba(142,68,173,.08)!important;border-left:2px solid #8e44ad}
+/* Multi-server environment section */
+.env-key-row{padding:8px 12px;background:#eef3fb;border-left:3px solid #1a3a8a;border-radius:0 4px 4px 0;font-size:12px;margin-bottom:4px}
+table.topo-tbl{width:100%;border-collapse:collapse;margin-bottom:6px}
+table.topo-tbl td{padding:5px 10px;border-bottom:1px solid #f0f2f6;font-size:12px;vertical-align:middle}
+table.topo-tbl tr:last-child td{border-bottom:none}
+.topo-role{font-weight:600;color:#3a4a6a;white-space:nowrap;width:170px}
+.topo-srvs{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.topo-srv{display:inline-block;background:#dde8f8;color:#1a3a8a;border-radius:3px;padding:2px 8px;font-size:11px;font-weight:700}
+.topo-sql{background:#d4edda;color:#155724}
+.topo-db{color:#666;font-size:11px}
+.topo-src{color:#aaa;font-size:10px;font-style:italic}
+.srv-card{border:1px solid #d4dff0;border-radius:6px;margin-bottom:8px;overflow:hidden}
+.srv-card-hdr{display:flex;align-items:center;gap:8px;padding:9px 14px;background:#1a2744;color:#fff;cursor:pointer;user-select:none}
+.srv-card-hdr:hover{background:#253060}
+.srv-name{font-size:13px;font-weight:700;flex:1}
+.tok{font-size:14px;font-weight:bold;color:#9ab;margin-left:auto}
+.srv-badge{border-radius:3px;padding:2px 9px;font-size:10px;font-weight:700;white-space:nowrap}
+.srv-local{background:#1a7a3c;color:#fff}
+.srv-ok{background:#1565c0;color:#fff}
+.srv-fail{background:#b71c1c;color:#fff;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+.srv-unknown{background:#546e7a;color:#fff}
+.srv-card-body{padding:12px 14px;background:#fafbfd}
+.srv-sect-hdr{margin:10px 0 5px;font-size:10px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid #eee;padding-bottom:3px}
+.srv-card-body .srv-sect-hdr:first-child{margin-top:0}
+.srv-scan-fail{background:#fdf3f2;border-left:3px solid #e74c3c;padding:7px 10px;border-radius:0 4px 4px 0;font-size:11px;color:#c0392b;margin-bottom:6px}
 '@
 
     $js = @'
@@ -2767,7 +3102,21 @@ function Run-After {
     $outDir = Join-Path $OutputRoot "${hostname}_${stamp}_After"
     Ensure-Dir $OutputRoot; Ensure-Dir $outDir
 
-    $data    = Collect-Data -SaveRawTo $outDir
+    $data = Collect-Data -SaveRawTo $outDir
+
+    # Discover all servers from cas_installedsoftware and remote-scan each one
+    $serverNames = @($data.Components | Select-Object -ExpandProperty SystemName -Unique |
+                     Where-Object { $_ -ne 'Unknown System' } | Sort-Object)
+    if ($serverNames.Count -gt 0) {
+        Write-Host "  [Remote] Discovered $($serverNames.Count) server(s): $($serverNames -join ', ')" -ForegroundColor Cyan
+        $remoteScans = @{}
+        foreach ($sn in $serverNames) {
+            $remoteScans[$sn] = Collect-RemoteServerData -ServerName $sn
+        }
+        $data.ServerNames = $serverNames
+        $data.RemoteScans = $remoteScans
+    }
+
     $txtFile = Write-FullTxt    -data $data -OutDir $outDir -mode 'After'
                Write-SummaryTxt   -data $data -OutDir $outDir -mode 'After'
                Write-MetadataJson -data $data -OutDir $outDir -mode 'After'
