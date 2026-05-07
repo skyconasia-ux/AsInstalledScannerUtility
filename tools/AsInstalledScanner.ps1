@@ -44,9 +44,9 @@ $DbBase     = 'C:\Windows\System32\config\systemprofile\AppData\Local\Equitrac\E
 # IsXml: $true = value is an XML blob (truncated in summary, expanded in full)
 # ============================================================
 $WatchedKeys = @(
-    # Authentication — Access Permissions
+    # Authentication - Access Permissions
     @{ Key='cas||securitypolicysids';                Label='Security Policy SIDs (raw)';       Section='auth'; IsXml=$false },
-    # Authentication — External Auth
+    # Authentication - External Auth
     @{ Key='cas||authequitracwcws';                  Label='Workstation Equitrac Auth';         Section='auth'; IsXml=$false;
        ValueMap=@{'0'='Disabled';'1'='Enabled with password prompt';'2'='Enabled without password prompt'} },
     @{ Key='cas||identityproviderwcws';              Label='Workstation Identity Provider';     Section='auth'; IsXml=$false;
@@ -55,7 +55,7 @@ $WatchedKeys = @(
        ValueMap=@{'0'='Disabled';'1'='Enabled'} },
     @{ Key='cas||clientauthconfig';                  Label='Auth Method Config (raw XML)';      Section='auth'; IsXml=$true  },
     @{ Key='ads||settingsdoc';                       Label='AD Sync Settings (raw XML)';        Section='dirsync'; IsXml=$true  },
-    # Authentication — Device Clients
+    # Authentication - Device Clients
     @{ Key='dce||enableswipe';                       Label='Allow Card Swipe Login';            Section='auth'; IsXml=$false;
        ValueMap=@{'0'='Off';'1'='On'} },
     @{ Key='dce||nosecondaryidwithswipe';            Label='Req. Extra Auth with Swipe';        Section='auth'; IsXml=$false;
@@ -67,10 +67,10 @@ $WatchedKeys = @(
     @{ Key='dce||denypromptemptypassword';           Label='Deny Login with Empty Password';    Section='auth'; IsXml=$false;
        ValueMap=@{'0'='No';'1'='Yes'} },
     @{ Key='dce||defaultfunction';                   Label='Default Function at Device';        Section='auth'; IsXml=$false },
-    # Authentication — Workstation / Web Client
+    # Authentication - Workstation / Web Client
     @{ Key='cas||caspin1pcmanager';                  Label='PIN1 in PC Manager';                Section='auth'; IsXml=$false },
     @{ Key='cas||caspin2pcmanager';                  Label='PIN2 in PC Manager';                Section='auth'; IsXml=$false },
-    # Authentication — Card Registration
+    # Authentication - Card Registration
     @{ Key='dce||authequitraccardreg';               Label='Card Reg: Equitrac Auth';           Section='auth'; IsXml=$false;
        ValueMap=@{'0'='Off';'1'='On'} },
     @{ Key='dce||authidentityprovidercardreg';       Label='Card Reg: Identity Provider';       Section='auth'; IsXml=$false;
@@ -79,20 +79,20 @@ $WatchedKeys = @(
        ValueMap=@{'0'='Store as Primary PIN';'1'='Store as Alternate PIN'} },
     @{ Key='dce||registertwocards';                  Label='Dual Card Reader Mode';             Section='auth'; IsXml=$false;
        ValueMap=@{'0'='Disabled';'1'='Enabled'} },
-    # Authentication — Encryption
+    # Authentication - Encryption
     @{ Key='cas||encryptsecondarypin';               Label='Store Secondary PIN Encrypted';     Section='auth'; IsXml=$false;
        ValueMap=@{'N'='Disabled';'Y'='Enabled'} },
-    # Authentication — Card Setup
+    # Authentication - Card Setup
     @{ Key='cas||casstartpinposition';               Label='Card Data: From Position';          Section='auth'; IsXml=$false },
     @{ Key='cas||casendpinposition';                 Label='Card Data: To Position';            Section='auth'; IsXml=$false },
     @{ Key='dce||hidparameters';                     Label='HID Decoding Parameters (raw XML)'; Section='auth'; IsXml=$true  },
-    # Authentication — CAS Offline Behavior
+    # Authentication - CAS Offline Behavior
     @{ Key='dce||cacheuserloginofflinettldays';      Label='Login Cache TTL (days, 0=disabled)';Section='auth'; IsXml=$false },
     @{ Key='dce||supportofflinemode';                Label='Login Caching';                     Section='auth'; IsXml=$false;
        ValueMap=@{'0'='Disabled';'1'='Enabled'} },
     @{ Key='cas||casdownaction';                     Label='Print Behavior';                    Section='auth'; IsXml=$false;
        ValueMap=@{'PrintChargeLater'='Print, charge accounts later';'AutoSelect'='Auto select';'Auto'='Auto select';'DoNotPrint'='Do not print'} },
-    # Authentication — Misc
+    # Authentication - Misc
     @{ Key='dce||adminpin';                          Label='Admin PIN';                         Section='auth'; IsXml=$false },
     @{ Key='dce||maxpinlength';                      Label='Max PIN Length';                    Section='auth'; IsXml=$false },
     @{ Key='cas||loginexpiry';                       Label='Login Expiry (seconds)';            Section='auth'; IsXml=$false },
@@ -745,7 +745,7 @@ function Collect-Data {
 
     $keyValues = @{}
     foreach ($wk in $WatchedKeys) { $keyValues[$wk.Key] = EV $wk.Key }
-    # Keys that live authoritatively in DRE — override DCE-first EV result
+    # Keys that live authoritatively in DRE - override DCE-first EV result
     foreach ($dk in @('cas||casdownaction')) {
         if ($script:dre.ContainsKey($dk)) { $keyValues[$dk] = $script:dre[$dk] }
     }
@@ -756,7 +756,7 @@ function Collect-Data {
     $smtpSrv  = ''; $smtpPort = ''
     if ($smtpAddr -match '^([^:]+):(\d+)$') { $smtpSrv=$Matches[1]; $smtpPort=$Matches[2] }
 
-    # Auth data — parsed from EQVar values for structured HTML rendering
+    # Auth data - parsed from EQVar values for structured HTML rendering
     $authData = @{}
 
     # Resolve security policy SIDs to account names
@@ -776,7 +776,7 @@ function Collect-Data {
     }
     $authData['SecurityPolicySids'] = $resolvedSids
 
-    # Parse clientauthconfig XML — domains, LDAP servers, auth method flags
+    # Parse clientauthconfig XML - domains, LDAP servers, auth method flags
     # type=0 items = Windows domains; type=2 items = LDAP servers
     $cacXml = EV 'cas||clientauthconfig'
     $authData['AuthEquitracPINS']         = ''
@@ -820,7 +820,7 @@ function Collect-Data {
         } catch { }
     }
 
-    # Parse hidparameters XML — HID card groups
+    # Parse hidparameters XML - HID card groups
     # Structure: HIDParameters > Groups > item0..N > { GroupName, IsDefault, Items > item0..N }
     $hidXml = EV 'dce||hidparameters'
     $authData['HidGroups'] = [System.Collections.Generic.List[object]]::new()
@@ -915,7 +915,7 @@ function Collect-Data {
         try {
             $sx = [xml]$snmpXml
             $root = $sx.DocumentElement
-            # Version is XML schema version (always 0), not polling interval — skipped
+            # Version is XML schema version (always 0), not polling interval - skipped
             $csNode = $root.SelectSingleNode('ConfigSets')
             if ($csNode) {
                 foreach ($cfgNode in $csNode.ChildNodes) {
@@ -956,6 +956,20 @@ function Collect-Data {
         } catch { }
     }
 
+    # --- Parse LDAP and Azure AD settings from cas_config BCP ---
+    function Get-CasConfigAttr { param([string]$attrName)
+        foreach ($line in $bcp['cas_config']) {
+            $f = $line -split '\|', 7
+            # columns: system|subsystem1|subsystem2|updatelisteners|attribute|attrvalue|usn
+            if ($f.Count -ge 6 -and $f[1] -eq 'ADS' -and $f[4] -eq $attrName) {
+                return $f[5]
+            }
+        }
+        return ''
+    }
+    $ldapXml    = Get-CasConfigAttr 'LDAPSettingsDoc'
+    $azureAdXml = Get-CasConfigAttr 'AzureADSettingsDoc'
+
     return [PSCustomObject]@{
         Hostname    = $hostname
         AppName     = $AppName
@@ -976,6 +990,8 @@ function Collect-Data {
         WinData     = $winData
         AuthData    = $authData
         NetData     = $netData
+        LdapXml     = $ldapXml
+        AzureAdXml  = $azureAdXml
     }
 }
 
@@ -1419,7 +1435,7 @@ function Build-AuthHtml {
     $dcHtml  += "<tr><td colspan='2' style='height:6px;border:none;background:none'></td></tr>"
     # B. Keyboard block
     $dcHtml  += ARowH 'Allow keyboard login'  (DCOn $kbOn)
-    # Keyboard Equitrac auth mode — locked to "with password prompt" when card swipe secondary auth is enabled
+    # Keyboard Equitrac auth mode - locked to "with password prompt" when card swipe secondary auth is enabled
     $kbMode   = if ($reqExtra -eq '0') { 'Enabled with password prompt' } else { 'Enabled without password prompt' }
     $dcHtml  += ARS1 'Equitrac authentication'  $kbMode
     $dcHtml  += ARS2 'Require password only if PIN2 available (legacy devices only)'  (YNo $reqPin2)
@@ -1767,6 +1783,163 @@ function Build-DirSyncHtml {
         }
 
         $html += "</div>" # end ds-srv-body
+    }
+
+    # ---- LDAP ----
+    $html += AG 'LDAP'
+    $ldapXml = $data.LdapXml
+    if (-not $ldapXml -or $ldapXml -match '^\s*<LDAPSyncSettings\s*/>\s*$' -or $ldapXml -match '<LDAPSyncSettings>\s*</LDAPSyncSettings>') {
+        $html += "<p style='color:#aaa;padding:8px;font-size:12px'>No LDAP servers configured.</p>"
+    } else {
+        try {
+            $ldoc = [xml]$ldapXml
+            $lsrvs = $ldoc.LDAPSyncSettings.ChildNodes
+            if (-not $lsrvs -or $lsrvs.Count -eq 0) {
+                $html += "<p style='color:#aaa;padding:8px;font-size:12px'>No LDAP servers configured.</p>"
+            } else {
+                foreach ($ls in $lsrvs) {
+                    $lSrv    = if ($ls.Server)     { $ls.Server }     else { '' }
+                    $lPort   = if ($ls.ServerPort)  { $ls.ServerPort }  else { '' }
+                    $lBaseDN = if ($ls.SearchBaseDN) { $ls.SearchBaseDN } else { '' }
+                    $lLogin  = if ($ls.LoginID)     { $ls.LoginID }    else { '' }
+                    $lPwd    = if ($ls.LoginPwd -and $ls.LoginPwd.Trim()) { "<span style='color:#555'>&#11044;&#11044;&#11044;&#11044;&#11044;&#11044; <small style='color:#888'>(configured)</small></span>" } else { "<span class='dc-off'>Not configured</span>" }
+                    $lVer    = if ($ls.Version)     { $ls.Version }    else { '' }
+                    $lSSL    = ($ls.UseSSL -eq '-1' -or $ls.UseSSL -eq '1')
+                    $lFilter = if ($ls.SearchFilter -and $ls.SearchFilter.Trim()) { HE $ls.SearchFilter.Trim() } else { "<span class='ds-empty'>(none)</span>" }
+                    $lSrvLabel = "$lSrv$(if($lBaseDN){" ($lBaseDN)"})"
+
+                    $html += "<div class='ds-srv-hdr'><span class='ds-srv-icon'>&#128279;</span> $(HE $lSrv)"
+                    if ($lBaseDN) { $html += " <span class='ds-partition'>($(HE $lBaseDN))</span>" }
+                    $html += "</div><div class='ds-srv-body'>"
+
+                    # Connection
+                    $html += "<table class='kv ds-inner'>"
+                    $html += "<tr><td class='k'>LDAP server</td><td class='v'>$(HE $lSrv)</td></tr>"
+                    $html += "<tr><td class='k'>Port</td><td class='v'>$(HE $lPort)</td></tr>"
+                    $html += "<tr><td class='k'>Base DN</td><td class='v'>$(HE $lBaseDN)</td></tr>"
+                    $html += "<tr><td class='k'>Login ID</td><td class='v'>$(HE $lLogin)</td></tr>"
+                    $html += "<tr><td class='k'>Login password</td><td class='v'>$lPwd</td></tr>"
+                    $html += "<tr><td class='k'>LDAP version</td><td class='v'>$(HE $lVer)</td></tr>"
+                    $lSSLIcon = if ($lSSL) { "<span class='eq-on'>&#9745; Checked</span>" } else { "<span class='eq-off'>&#9744; Unchecked</span>" }
+                    $html += "<tr><td class='k'>Use SSL</td><td class='v'>$lSSLIcon</td></tr>"
+                    $html += "</table>"
+
+                    # Filtering
+                    $html += DSSec 'Filtering'
+                    $html += "<table class='kv ds-inner'><tr><td class='k'>Search filter</td><td class='v'>$lFilter</td></tr></table>"
+
+                    # Field Mappings
+                    $html += DSSec 'Field Mappings'
+                    $ra = $ls.RowAttributes
+                    $html += "<table class='kv ds-inner'>"
+                    $html += "<tr><td class='k'>Account name</td><td class='v'>$(DSVal $ra.AccountName)</td></tr>"
+                    $html += "<tr><td class='k'>Account name (alternate)</td><td class='v'>$(DSVal $ra.AccountNameAlt)</td></tr>"
+                    $html += "<tr><td class='k'>Display name</td><td class='v'>$(DSVal $ra.DisplayName)</td></tr>"
+                    $html += "<tr><td class='k'>Display name (alternate)</td><td class='v'>$(DSVal $ra.DisplayNameAlt)</td></tr>"
+                    $html += "<tr><td class='k'>Display name (alternate 2)</td><td class='v'>$(DSVal $ra.DisplayNameAlt2)</td></tr>"
+                    $html += "<tr><td class='k'>Email address</td><td class='v'>$(DSVal $ra.EmailAddress)</td></tr>"
+                    $html += "<tr><td class='k'>Primary PIN</td><td class='v'>$(DSVal $ra.UserPrimaryPIN)</td></tr>"
+                    $html += "<tr><td class='k'>Secondary PIN</td><td class='v'>$(DSVal $ra.UserPINSecondaryPIN)</td></tr>"
+                    $html += "<tr><td class='k'>Alternate PIN</td><td class='v'>$(DSVal $ra.UserAlternatePIN)</td></tr>"
+                    $html += "<tr><td class='k'>Department</td><td class='v'>$(DSVal $ra.Department)</td></tr>"
+                    $html += "<tr><td class='k'>Location</td><td class='v'>$(DSVal $ra.Location)</td></tr>"
+                    $html += "<tr><td class='k'>Color quota</td><td class='v'>$(DSVal $ra.UserColorQuota)</td></tr>"
+                    $html += "<tr><td class='k'>Home print server</td><td class='v'>$(DSVal $ra.UserHomeServer)</td></tr>"
+                    $html += "<tr><td class='k'>Home scan folder</td><td class='v'>$(DSVal $ra.HomeFolder)</td></tr>"
+                    $html += "<tr><td class='k'>Delegates</td><td class='v'>$(DSVal $ra.Delegates)</td></tr>"
+                    $html += "</table>"
+
+                    # Synchronization
+                    $html += DSSec 'Synchronization'
+                    $lFreq = if ($ls.UpdateFrequency -match '^\d+$') { "$($ls.UpdateFrequency) minutes" } else { '(not set)' }
+                    $noEnf = ($ls.EnforceDeptLimits -eq '0')
+                    $html += "<table class='kv ds-inner'>"
+                    $html += "<tr><td class='k' colspan='2'><strong>Updates to be applied</strong></td></tr>"
+                    $html += "<tr><td class='k sub1'>Adds</td><td class='v'>$(DSCb $ls.SyncAdds 'Adds')</td></tr>"
+                    $html += "<tr><td class='k sub1'>Changes</td><td class='v'>$(DSCb $ls.SyncChanges 'Changes')</td></tr>"
+                    $html += "<tr><td class='k sub1'>Deletes</td><td class='v'>$(DSCb $ls.SyncDeletes 'Deletes')</td></tr>"
+                    $noEnfIcon = if ($noEnf) { "<span class='eq-on'>&#9745;</span>" } else { "<span class='eq-off'>&#9744;</span>" }
+                    $html += "<tr><td class='k' colspan='2'><span class='ds-cb'>$noEnfIcon Do not enforce account limits for users in auto-created departments</span></td></tr>"
+                    $html += "<tr><td class='k'>Automatic synchronization</td><td class='v'>$(DSCb $ls.DoAutoSync 'Enabled')</td></tr>"
+                    $html += "</table>"
+
+                    $html += "</div>" # end ds-srv-body
+                }
+            }
+        } catch {
+            $html += "<p style='color:#c00;padding:8px;font-size:12px'>Error parsing LDAP settings: $_</p>"
+        }
+    }
+
+    # ---- Microsoft Entra ID ----
+    $html += AG 'Microsoft Entra ID'
+    $azXml = $data.AzureAdXml
+    $azIsEmpty = (-not $azXml -or $azXml -match '<AzureADSyncSettings>\s*</AzureADSyncSettings>' -or $azXml -match '<AzureADSyncSettings\s*/>')
+    if ($azIsEmpty) {
+        $html += "<div class='ds-ctr-note' style='background:#fff8e6;color:#856404;border-left:3px solid #ffc107'>&#9432; No Entra ID configuration found - section may not be in use.</div>"
+    } else {
+        try {
+            $adoc = [xml]$azXml
+            $az   = $adoc.AzureADSyncSettings.item0
+            if (-not $az) { throw 'No item0' }
+
+            # Status
+            $lastSync = if ($az.LastSyncTimeUTC -eq '0' -or -not $az.LastSyncTimeUTC) { 'Never' } else { $az.LastSyncTimeUTC }
+            $autoSync = ($az.DoAutoSync -eq '-1' -or $az.DoAutoSync -eq '1')
+            $configured = if ($autoSync -or $lastSync -ne 'Never') { 'Configured' } else { 'Unknown usage' }
+
+            $html += "<div class='ds-srv-hdr' style='background:#0a7dc2'><span class='ds-srv-icon'>&#9729;</span> Microsoft Entra ID <span class='ds-partition'>($configured)</span></div>"
+            $html += "<div class='ds-srv-body'>"
+
+            # Status table
+            $html += "<table class='kv ds-inner'>"
+            $html += "<tr><td class='k'>Last import time</td><td class='v'>$(HE $lastSync)</td></tr>"
+            $noEnfAz = ($az.DoNotEnforceDepUsersAcctLimit -eq '-1' -or $az.DoNotEnforceDepUsersAcctLimit -eq '1')
+            $noEnfAzIcon = if ($noEnfAz) { "<span class='eq-on'>&#9745;</span>" } else { "<span class='eq-off'>&#9744;</span>" }
+            $html += "<tr><td class='k' colspan='2'><span class='ds-cb'>$noEnfAzIcon Do not enforce account limits for users in auto-created departments</span></td></tr>"
+            $html += "</table>"
+
+            # Differential import
+            $html += DSSec 'Differential Import'
+            $azFreq = if ($az.UpdateFrequency -match '^\d+$') { "$($az.UpdateFrequency) minutes" } else { '(not set)' }
+            $azSyncOnSave = ($az.ImportImmediately -eq '-1' -or $az.ImportImmediately -eq '1')
+            $html += "<table class='kv ds-inner'>"
+            $html += "<tr><td class='k' colspan='2'><strong>Updates to be applied</strong></td></tr>"
+            $html += "<tr><td class='k sub1'>Adds</td><td class='v'>$(DSCb $az.SyncAdds 'Adds')</td></tr>"
+            $html += "<tr><td class='k sub1'>Changes</td><td class='v'>$(DSCb $az.SyncChanges 'Changes')</td></tr>"
+            $html += "<tr><td class='k sub1'>Deletes</td><td class='v'>$(DSCb $az.SyncDeletes 'Deletes')</td></tr>"
+            $html += "<tr><td class='k'>Automatic synchronization</td><td class='v'>$(DSCb $az.DoAutoSync 'Enabled')</td></tr>"
+            $html += "<tr><td class='k'>Interval</td><td class='v'>$(HE $azFreq)</td></tr>"
+            $azSyncOnSaveIcon = if ($azSyncOnSave) { "<span class='eq-on'>&#9745; Enabled</span>" } else { "<span class='eq-off'>&#9744; Disabled</span>" }
+            $html += "<tr><td class='k'>Synchronize on save</td><td class='v'>$azSyncOnSaveIcon</td></tr>"
+            $html += "</table>"
+
+            # Full import (no separate full-import fields in XML - same sync-on-save flag controls both in EQ)
+            $html += DSSec 'Full Import'
+            $html += "<table class='kv ds-inner'>"
+            $html += "<tr><td class='k'>Synchronize on save</td><td class='v'>$azSyncOnSaveIcon</td></tr>"
+            $html += "</table>"
+
+            # Field Mappings
+            $html += DSSec 'Field Mappings'
+            $azRa = $az.RowAttributes
+            $html += "<table class='kv ds-inner'>"
+            $html += "<tr><td class='k'>Account name</td><td class='v'>$(DSVal $azRa.AccountName)</td></tr>"
+            $html += "<tr><td class='k'>Full name</td><td class='v'>$(DSVal $azRa.DisplayName)</td></tr>"
+            $html += "<tr><td class='k'>Email address</td><td class='v'>$(DSVal $azRa.EMailAddress)</td></tr>"
+            $html += "<tr><td class='k'>Primary PIN</td><td class='v'>$(DSVal $azRa.UserPrimaryPIN)</td></tr>"
+            $html += "<tr><td class='k'>Secondary PIN</td><td class='v'>$(DSVal $azRa.UserPINSecondaryPIN)</td></tr>"
+            $html += "<tr><td class='k'>Alternate PIN</td><td class='v'>$(DSVal $azRa.UserAlternatePIN)</td></tr>"
+            $html += "<tr><td class='k'>Department</td><td class='v'>$(DSVal $azRa.Department)</td></tr>"
+            $html += "<tr><td class='k'>Location</td><td class='v'>$(DSVal $azRa.Location)</td></tr>"
+            $html += "<tr><td class='k'>Color quota</td><td class='v'>$(DSVal $azRa.UserColorQuota)</td></tr>"
+            $html += "<tr><td class='k'>Home print server</td><td class='v'>$(DSVal $azRa.UserHomeServer)</td></tr>"
+            $html += "</table>"
+
+            $html += "</div>" # end ds-srv-body
+        } catch {
+            $html += "<p style='color:#c00;padding:8px;font-size:12px'>Error parsing Entra ID settings: $_</p>"
+        }
     }
 
     return $html
