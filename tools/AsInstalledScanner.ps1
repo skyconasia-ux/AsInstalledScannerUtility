@@ -20,7 +20,7 @@
 # Supersedes Export-EquitracConfig.ps1 for the After/Full modes.
 
 param(
-    [ValidateSet('Before','After','Compare','Full','')]
+    [ValidateSet('Before','After','Compare','Full','LocalCollector','BuildCombined','Settings','')]
     [string]$Mode = ''
 )
 
@@ -179,6 +179,58 @@ function Ensure-Dir { param([string]$p)
 }
 
 # ============================================================
+# SETTINGS
+# ============================================================
+$SettingsFile = Join-Path $scriptDir 'ais_settings.json'
+$DefaultSettings = [ordered]@{
+    RemoteScanMode         = 'winrm'
+    WinRmAccountType       = 'current'
+    WinRmAccount           = ''
+    WinRmPort              = 5985
+    SqlAuthMode            = 'sql-sa'
+    SqlAccount             = ''
+    CollectedResultsFolder = ''
+    StaleThresholdHours    = 24
+}
+
+function Read-Settings {
+    $s = [ordered]@{}
+    foreach ($k in $DefaultSettings.Keys) { $s[$k] = $DefaultSettings[$k] }
+    if (Test-Path $SettingsFile) {
+        try {
+            $j = Get-Content $SettingsFile -Raw | ConvertFrom-Json
+            foreach ($k in $s.Keys.Clone()) {
+                if ($j.PSObject.Properties[$k]) { $s[$k] = $j.$k }
+            }
+        } catch {}
+    }
+    if (-not $s.CollectedResultsFolder) {
+        $s.CollectedResultsFolder = Join-Path $scriptDir 'CollectedResults'
+    }
+    return $s
+}
+
+function Write-Settings {
+    param([hashtable]$s)
+    # NEVER store passwords - only account names and non-sensitive settings
+    $safe = [ordered]@{
+        RemoteScanMode         = $s.RemoteScanMode
+        WinRmAccountType       = $s.WinRmAccountType
+        WinRmAccount           = $s.WinRmAccount
+        WinRmPort              = $s.WinRmPort
+        SqlAuthMode            = $s.SqlAuthMode
+        SqlAccount             = $s.SqlAccount
+        CollectedResultsFolder = $s.CollectedResultsFolder
+        StaleThresholdHours    = $s.StaleThresholdHours
+    }
+    $json = $safe | ConvertTo-Json
+    [System.IO.File]::WriteAllText($SettingsFile, $json, [System.Text.Encoding]::UTF8)
+}
+
+# Load settings at startup
+$script:Settings = Read-Settings
+
+# ============================================================
 # INTERACTIVE MENU
 # ============================================================
 function Show-Menu {
@@ -189,19 +241,28 @@ function Show-Menu {
     Write-Host "    Server : $hostname" -ForegroundColor Gray
     Write-Host '  ================================================' -ForegroundColor Cyan
     Write-Host ''
-    Write-Host '    1.  BEFORE   Capture baseline (before UI changes)' -ForegroundColor Yellow
-    Write-Host '    2.  AFTER    Capture current state + HTML report'   -ForegroundColor Green
-    Write-Host '    3.  COMPARE  Diff latest Before vs After'           -ForegroundColor Magenta
-    Write-Host '    4.  FULL     After + Compare in one run'            -ForegroundColor Cyan
+    Write-Host '    1.  BEFORE           Capture baseline (before UI changes)'          -ForegroundColor Yellow
+    Write-Host '    2.  AFTER            Capture current state + HTML report'            -ForegroundColor Green
+    Write-Host '    3.  COMPARE          Diff latest Before vs After'                   -ForegroundColor Magenta
+    Write-Host '    4.  FULL             After + Compare in one run'                    -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host '    5.  LOCAL COLLECTOR  Scan this server only, export JSON for import' -ForegroundColor White
+    Write-Host '    6.  BUILD COMBINED   Import collector JSONs + SQL, combined report' -ForegroundColor White
+    Write-Host '    7.  SETTINGS         Configure scan mode, credentials, paths'       -ForegroundColor DarkCyan
     Write-Host ''
     Write-Host '    Q.  Quit' -ForegroundColor DarkGray
     Write-Host ''
-    $c = Read-Host '  Select [1-4, Q]'
+    Write-Host "    Scan mode : $($script:Settings.RemoteScanMode)   Results folder : $($script:Settings.CollectedResultsFolder)" -ForegroundColor DarkGray
+    Write-Host ''
+    $c = Read-Host '  Select [1-7, Q]'
     switch ($c.Trim().ToUpper()) {
-        '1' { return 'Before'  }
-        '2' { return 'After'   }
-        '3' { return 'Compare' }
-        '4' { return 'Full'    }
+        '1' { return 'Before'         }
+        '2' { return 'After'          }
+        '3' { return 'Compare'        }
+        '4' { return 'Full'           }
+        '5' { return 'LocalCollector' }
+        '6' { return 'BuildCombined'  }
+        '7' { Run-Settings; return Show-Menu }
         'Q' { Write-Host 'Bye.' -ForegroundColor Gray; exit 0 }
         default { Write-Host "  Invalid choice '$c'" -ForegroundColor Red; return Show-Menu }
     }
@@ -622,14 +683,15 @@ function New-KVTable {
 # REMOTE SERVER DATA COLLECTION
 # ============================================================
 function Collect-RemoteServerData {
-    param([string]$ServerName)
+    param([string]$ServerName, [PSCredential]$Credential = $null)
     # Skip if this is the local machine
     $localAliases = @($env:COMPUTERNAME, $hostname, 'localhost', '127.0.0.1', '.')
     foreach ($a in $localAliases) { if ($ServerName -ieq $a) { return @{ IsLocal=$true } } }
 
     Write-Host "    Remote scan: $ServerName ..." -ForegroundColor Cyan
     try {
-        $result = Invoke-Command -ComputerName $ServerName -ErrorAction Stop -ScriptBlock {
+        $icCred = if ($Credential) { @{ Credential = $Credential } } else { @{} }
+        $result = Invoke-Command -ComputerName $ServerName -ErrorAction Stop @icCred -ScriptBlock {
             $ErrorActionPreference = 'SilentlyContinue'
             $cs   = Get-WmiObject Win32_ComputerSystem
             $os   = Get-WmiObject Win32_OperatingSystem
@@ -2194,15 +2256,28 @@ function Build-MultiServerHtml {
         $scan    = if ($remoteScans.ContainsKey($sn)) { $remoteScans[$sn] } else { $null }
         $isLocal = ($scan -and $scan.IsLocal) -or ($sn -ieq $data.Hostname)
 
-        # Status badge
+        # Status badge - Method-aware
+        $method = if ($scan -and $scan.Method) { $scan.Method } else { '' }
         $badge = if ($isLocal) {
             "<span class='srv-badge srv-local'>Primary</span>"
+        } elseif ($method -eq 'LocalCollector') {
+            "<span class='srv-badge srv-collector'>Local Collector</span>"
+        } elseif ($method -eq 'LocalCollector-Unmatched') {
+            "<span class='srv-badge srv-unmatched'>Collector (Unmatched)</span>"
+        } elseif ($method -eq 'SQLOnly' -or ($scan -and -not $scan.Success -and $scan.Error -match 'SQL-only')) {
+            "<span class='srv-badge srv-sqlonly'>SQL-only</span>"
         } elseif (-not $scan) {
             "<span class='srv-badge srv-unknown'>Not Scanned</span>"
         } elseif ($scan.Success) {
             "<span class='srv-badge srv-ok'>WinRM OK</span>"
         } else {
             "<span class='srv-badge srv-fail'>$(HE $scan.Error)</span>"
+        }
+        # Import timestamp + stale warning
+        $importInfo = ''
+        if ($scan -and $scan.CollectedAt) {
+            $staleWarn = if ($scan.Stale) { "<span class='srv-scan-warn'>&#9888; Imported result may be stale</span>" } else { '' }
+            $importInfo = "<div class='lc-import-info'>&#128190; Imported: $(HE $scan.CollectedAt)$staleWarn</div>"
         }
 
         # Components table for this server
@@ -2310,7 +2385,7 @@ function Build-MultiServerHtml {
             "<span style='font-size:14px'>&#128187;</span>" +
             " <span class='srv-name'>$(HE $sn)</span>" +
             " $badge <span class='tok' id='t-$srvId'>+</span></div>" +
-            "<div class='srv-card-body hide' id='b-$srvId'>$compHtml$detailHtml</div></div>"
+            "<div class='srv-card-body hide' id='b-$srvId'>$importInfo$compHtml$detailHtml</div></div>"
     }
 
     $body = "<div class='env-key-row'>&#127760; <strong>$(HE $data.EnvironmentKey)</strong></div>" +
@@ -2363,6 +2438,7 @@ function Write-HtmlReport {
     $nav += "<a href='#s-pricing'>Pricing</a><a href='#s-workflows'>Workflows</a>"
     $nav += "<a href='#s-pullgroups'>Pull Print Groups</a><a href='#s-users'>Users</a>"
     $nav += "<div class='grp'>Full Data</div><a href='#s-eqvar'>EQVar Full Dump</a>"
+    $nav += "<div class='grp'>Access</div><a href='#s-firewall'>Firewall / Access</a>"
 
     # --- Summary cards ---
     $smtp = if ($data.SmtpServer) { "$($data.SmtpServer):$($data.SmtpPort)" } else { 'Not set' }
@@ -2737,7 +2813,38 @@ function Write-HtmlReport {
     $eqSection = New-HtmlSection 'eqvar' 'Full EQVar Configuration (DCE_config.db3)' $eqBody
 
     $multiSection = Build-MultiServerHtml $data
-    $formatted = $multiSection + $winHtml + $compSection + $keyHtml + $pricingSection + $wfSection + $pgSection + $userSection + $eqSection
+
+    # Firewall / Access Requirements section
+    $st    = $script:Settings
+    $fwRows  = ''
+    $sqlPort = if ($st.SqlAuthMode -match 'windows') { 'Windows Auth (Named Pipes / TCP 1433)' } else { 'TCP 1433 (SQL Auth)' }
+    $fwRows += "<tr><td class='k'>SQL Server Port</td><td class='v'>$sqlPort</td></tr>"
+    $fwRows += "<tr><td class='k'>SQL Browser</td><td class='v'>UDP 1434 (if using named instance)</td></tr>"
+    if ($st.RemoteScanMode -eq 'winrm') {
+        $wmPort = "$($st.WinRmPort) ($(if($st.WinRmPort -eq 5986){'WinRM HTTPS'}else{'WinRM HTTP'}))"
+        $fwRows += "<tr><td class='k'>WinRM Port</td><td class='v'>TCP $wmPort</td></tr>"
+    }
+    $fwRows += "<tr><td class='k'>Remote Scan Mode</td><td class='v'>$(HE $st.RemoteScanMode)</td></tr>"
+    $acctDisplay = switch ($st.WinRmAccountType) {
+        'current'  { 'Current Windows user (no additional credentials)' }
+        'supplied' { "Supplied account: $(HE $st.WinRmAccount)" }
+        default    { HE $st.WinRmAccountType }
+    }
+    $fwRows += "<tr><td class='k'>Windows / WinRM Account</td><td class='v'>$acctDisplay</td></tr>"
+    $sqlAcctDisplay = switch ($st.SqlAuthMode) {
+        'sql-sa'              { 'SQL sa account' }
+        'sql-ro'              { "SQL read-only account: $(HE $st.SqlAccount)" }
+        'windows-current'     { 'Windows Authentication (current user)' }
+        'windows-supplied'    { "Windows Authentication: $(HE $st.SqlAccount)" }
+        default               { HE $st.SqlAuthMode }
+    }
+    $fwRows += "<tr><td class='k'>SQL Auth Account</td><td class='v'>$sqlAcctDisplay</td></tr>"
+    $fwRows += "<tr><td class='k'>Passwords stored</td><td class='v'><strong style='color:#1a7a3c'>Never</strong> - only account names saved in settings</td></tr>"
+    $fwBody  = "<table class='kv'>$fwRows</table>"
+    $fwBody += "<div class='firewall-assurance'><strong>Read-only assurance:</strong> This scanner uses only Get-* and read operations. It does not modify registry values, restart or stop services, install or uninstall software, change Windows roles, change SQL settings, update Equitrac/ControlSuite settings, or write files to remote servers. Allowed write operations: scanner result and report files on the local scanner server only.</div>"
+    $firewallSection = New-HtmlSection 'firewall' 'Firewall / Access Requirements' $fwBody
+
+    $formatted = $multiSection + $winHtml + $compSection + $keyHtml + $pricingSection + $wfSection + $pgSection + $userSection + $eqSection + $firewallSection
 
     # Build CSS and JS inline
     $css = @'
@@ -2874,6 +2981,12 @@ table.topo-tbl tr:last-child td{border-bottom:none}
 .srv-sect-hdr{margin:10px 0 5px;font-size:10px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid #eee;padding-bottom:3px}
 .srv-card-body .srv-sect-hdr:first-child{margin-top:0}
 .srv-scan-fail{background:#fdf3f2;border-left:3px solid #e74c3c;padding:7px 10px;border-radius:0 4px 4px 0;font-size:11px;color:#c0392b;margin-bottom:6px}
+.srv-collector{background:#1a5276;color:#fff}
+.srv-sqlonly{background:#7d6608;color:#fff}
+.srv-unmatched{background:#6a1b9a;color:#fff}
+.lc-import-info{font-size:11px;color:#1a5276;background:#eaf4fb;border-left:3px solid #1a5276;padding:5px 10px;border-radius:0 4px 4px 0;margin-bottom:7px}
+.srv-scan-warn{background:#f39c12;color:#fff;border-radius:3px;padding:1px 7px;font-size:10px;font-weight:700;margin-left:6px;white-space:nowrap}
+.firewall-assurance{margin-top:12px;background:#eafaf1;border-left:3px solid #1a7a3c;padding:8px 12px;border-radius:0 4px 4px 0;font-size:12px;color:#145a32;line-height:1.6}
 '@
 
     $js = @'
@@ -3081,6 +3194,305 @@ function Invoke-Compare {
 }
 
 # ============================================================
+# LOCAL COLLECTOR - Export per-server JSON for later import
+# ============================================================
+function Write-LocalCollectorJson {
+    param($winData, $eqServices, [string]$OutDir)
+    Ensure-Dir $OutDir
+    $ts   = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $base = "AsInstalledScanner_${hostname}_${ts}"
+    $json = [ordered]@{
+        SchemaVersion  = 1
+        CollectorMode  = $true
+        ServerName     = $hostname
+        FQDN           = "$hostname.$($env:USERDNSDOMAIN)"
+        CollectedAt    = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        OsName         = $winData.OsName
+        OsVersion      = $winData.OsVersion
+        Ram            = $winData.Ram
+        CpuName        = $winData.CpuName
+        CpuCores       = $winData.CpuCores
+        Manufacturer   = $winData.Manufacturer
+        Model          = $winData.Model
+        DomainName     = $winData.DomainName
+        BiosSerial     = $winData.BiosSerial
+        Drives         = @($winData.Drives | ForEach-Object { [ordered]@{ Name=$_.Name; Total=[string]$_.Total; Free=[string]$_.Free; Used=[string]$_.Used } })
+        Nics           = @($winData.Nics   | ForEach-Object { [ordered]@{ Desc=$_.Desc; IP=$_.IP; Gateway=$_.Gateway; DNS=$_.DNS; DHCP=$_.DHCP; Mac=$_.Mac } })
+        InstalledRoles = @($winData.InstalledRoles)
+        PrintQueues    = @($winData.PrintQueues | ForEach-Object { [ordered]@{ Name=$_.Name; DriverName=$_.DriverName } })
+        SqlInstances   = @($winData.SqlInstances | ForEach-Object { [ordered]@{ Name=$_.Name; Edition=$_.Edition; Status=$_.Status } })
+        EqServices     = @($eqServices | ForEach-Object { [ordered]@{ Name=$_.Name; Display=$_.Display; Status=$_.Status; StartType=$_.StartType } })
+    } | ConvertTo-Json -Depth 6
+    $jsonPath = Join-Path $OutDir "$base.json"
+    $txtPath  = Join-Path $OutDir "$base.txt"
+    [System.IO.File]::WriteAllText($jsonPath, $json, [System.Text.Encoding]::UTF8)
+
+    # TXT summary
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("AsInstalledScanner LOCAL COLLECTOR - $hostname - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
+    $lines.Add("=" * 70)
+    $lines.Add("OS      : $($winData.OsName)")
+    $lines.Add("RAM     : $($winData.Ram)")
+    $lines.Add("CPU     : $($winData.CpuName)")
+    $lines.Add("Domain  : $($winData.DomainName)")
+    $lines.Add("")
+    $lines.Add("EQ/CS Services:")
+    foreach ($sv in $eqServices) { $lines.Add("  [$($sv.Status)] $($sv.Display)") }
+    $lines.Add("")
+    $lines.Add("Print Queues: $($winData.PrintQueues.Count)")
+    foreach ($pq in $winData.PrintQueues | Select-Object -First 20) { $lines.Add("  $($pq.Name) [$($pq.DriverName)]") }
+    $lines.Add("")
+    $lines.Add("SQL Instances: $($winData.SqlInstances.Count)")
+    foreach ($si in $winData.SqlInstances) { $lines.Add("  $($si.Name) - $($si.Edition) [$($si.Status)]") }
+    [System.IO.File]::WriteAllText($txtPath, ($lines -join "`r`n"), [System.Text.Encoding]::UTF8)
+
+    return $jsonPath
+}
+
+function Find-CollectorJson {
+    param([string]$ServerName)
+    $folder = $script:Settings.CollectedResultsFolder
+    if (-not $folder -or -not (Test-Path $folder)) { return $null }
+    $sn = $ServerName.ToLower()
+    $best = $null; $bestTime = [datetime]::MinValue
+    Get-ChildItem $folder -Filter 'AsInstalledScanner_*.json' -File -ErrorAction SilentlyContinue | ForEach-Object {
+        $j = $null
+        try { $j = Get-Content $_.FullName -Raw | ConvertFrom-Json } catch {}
+        if ($j -and ($j.ServerName -ieq $ServerName -or $j.FQDN -ieq $ServerName)) {
+            if ($_.LastWriteTime -gt $bestTime) { $best = $_; $bestTime = $_.LastWriteTime }
+        }
+        # Also match by short name if FQDN was given or vice versa
+        elseif ($j -and ($j.ServerName -and $j.ServerName.Split('.')[0] -ieq $sn.Split('.')[0])) {
+            if ($_.LastWriteTime -gt $bestTime) { $best = $_; $bestTime = $_.LastWriteTime }
+        }
+    }
+    return $best
+}
+
+function Import-CollectorJson {
+    param([System.IO.FileInfo]$File)
+    if (-not $File) { return $null }
+    try {
+        $j = Get-Content $File.FullName -Raw | ConvertFrom-Json
+        $stale = ((Get-Date) - $File.LastWriteTime).TotalHours -gt $script:Settings.StaleThresholdHours
+        return @{
+            IsLocal      = $false
+            Success      = $true
+            Method       = 'LocalCollector'
+            ServerName   = $j.ServerName
+            CollectedAt  = $j.CollectedAt
+            Stale        = $stale
+            FilePath     = $File.FullName
+            Data         = [PSCustomObject]@{
+                ComputerName   = $j.ServerName
+                OsName         = $j.OsName
+                OsVersion      = $j.OsVersion
+                Ram            = $j.Ram
+                CpuName        = $j.CpuName
+                CpuCores       = $j.CpuCores
+                Manufacturer   = $j.Manufacturer
+                Model          = $j.Model
+                DomainName     = $j.DomainName
+                BiosSerial     = $j.BiosSerial
+                Drives         = $j.Drives
+                Nics           = $j.Nics
+                InstalledRoles = $j.InstalledRoles
+                PrintQueues    = $j.PrintQueues
+                SqlInstances   = $j.SqlInstances
+                EqServices     = $j.EqServices
+                SqlServices    = @()
+            }
+        }
+    } catch { return $null }
+}
+
+# ============================================================
+# RUN-SETTINGS - Interactive settings menu
+# ============================================================
+function Run-Settings {
+    $s = $script:Settings
+    $done = $false
+    while (-not $done) {
+        Clear-Host
+        Write-Host ''
+        Write-Host '  ======================================' -ForegroundColor Cyan
+        Write-Host '    Scanner Settings / Access'           -ForegroundColor White
+        Write-Host '  ======================================' -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host "  1. Remote Scan Mode       : $($s.RemoteScanMode)"       -ForegroundColor Yellow
+        Write-Host "  2. WinRM Account Type     : $($s.WinRmAccountType)"     -ForegroundColor Yellow
+        Write-Host "  3. WinRM Account          : $(if($s.WinRmAccount){"$($s.WinRmAccount)"}else{'(current user)'})" -ForegroundColor Yellow
+        Write-Host "  4. WinRM Port             : $($s.WinRmPort)"            -ForegroundColor Yellow
+        Write-Host "  5. SQL Auth Mode          : $($s.SqlAuthMode)"          -ForegroundColor Yellow
+        Write-Host "  6. SQL Account            : $(if($s.SqlAccount){"$($s.SqlAccount)"}else{'(from CONFIG block)'})" -ForegroundColor Yellow
+        Write-Host "  7. CollectedResults Folder: $($s.CollectedResultsFolder)" -ForegroundColor Yellow
+        Write-Host "  8. Stale Import Threshold : $($s.StaleThresholdHours) hours" -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host '  S. Save and return   R. Reset to defaults   X. Cancel' -ForegroundColor DarkCyan
+        Write-Host ''
+        $c = Read-Host '  Select [1-8, S, R, X]'
+        switch ($c.Trim().ToUpper()) {
+            '1' {
+                Write-Host '  Modes: winrm | sql-only | collector'
+                $v = Read-Host '  Enter mode'
+                if ($v -match '^(winrm|sql-only|collector)$') { $s.RemoteScanMode = $v.Trim() }
+                else { Write-Host '  Invalid. Must be: winrm, sql-only, or collector' -ForegroundColor Red; Start-Sleep 1 }
+            }
+            '2' {
+                Write-Host '  Types: current | supplied'
+                $v = Read-Host '  Enter type'
+                if ($v -match '^(current|supplied)$') { $s.WinRmAccountType = $v.Trim() }
+                else { Write-Host '  Invalid. Must be: current or supplied' -ForegroundColor Red; Start-Sleep 1 }
+            }
+            '3' {
+                Write-Host '  Enter account name (DOMAIN\user or user@domain). Leave blank for current user.'
+                $v = Read-Host '  Account'
+                $s.WinRmAccount = $v.Trim()
+            }
+            '4' {
+                $v = Read-Host '  WinRM Port [5985=HTTP / 5986=HTTPS]'
+                if ($v -match '^\d+$' -and [int]$v -gt 0 -and [int]$v -lt 65536) { $s.WinRmPort = [int]$v }
+                else { Write-Host '  Invalid port number' -ForegroundColor Red; Start-Sleep 1 }
+            }
+            '5' {
+                Write-Host '  Modes: sql-sa | sql-ro | windows-current | windows-supplied'
+                $v = Read-Host '  Enter mode'
+                if ($v -match '^(sql-sa|sql-ro|windows-current|windows-supplied)$') { $s.SqlAuthMode = $v.Trim() }
+                else { Write-Host '  Invalid SQL auth mode' -ForegroundColor Red; Start-Sleep 1 }
+            }
+            '6' {
+                Write-Host '  Enter SQL account name (leave blank to use CONFIG block default).'
+                $v = Read-Host '  SQL account'
+                $s.SqlAccount = $v.Trim()
+            }
+            '7' {
+                Write-Host '  Enter path for CollectedResults folder.'
+                Write-Host '  Example: C:\AsInstalledScanner\CollectedResults  or  \\server\share\CollectedResults'
+                $v = Read-Host '  Path'
+                if ($v.Trim()) { $s.CollectedResultsFolder = $v.Trim() }
+            }
+            '8' {
+                $v = Read-Host '  Stale threshold in hours (e.g. 24)'
+                if ($v -match '^\d+$') { $s.StaleThresholdHours = [int]$v }
+                else { Write-Host '  Invalid number' -ForegroundColor Red; Start-Sleep 1 }
+            }
+            'S' {
+                Write-Settings -s $s
+                $script:Settings = $s
+                Write-Host '  Settings saved.' -ForegroundColor Green
+                Start-Sleep 1
+                $done = $true
+            }
+            'R' {
+                $script:Settings = Read-Settings
+                $s = $script:Settings
+                Write-Host '  Reset to defaults.' -ForegroundColor Yellow
+                Start-Sleep 1
+            }
+            'X' { $done = $true }
+        }
+    }
+}
+
+# ============================================================
+# RUN-LOCAL-COLLECTOR - Scan this server only, no SQL required
+# ============================================================
+function Run-LocalCollector {
+    Write-Host "`n[LOCAL COLLECTOR] Scanning $hostname ..." -ForegroundColor White
+    $colDir = $script:Settings.CollectedResultsFolder
+    Ensure-Dir $colDir
+
+    $winData = Collect-WindowsData
+    # Collect EQ services locally
+    $eqSvcs = [System.Collections.Generic.List[object]]::new()
+    Get-Service | Where-Object {
+        $_.Name -match 'EQDce|EQDre|EQDme|EQCas|EQDws|EQSLP|EQSPE|EQSched|Equitrac|ControlSuite'
+    } | ForEach-Object {
+        $eqSvcs.Add([PSCustomObject]@{
+            Name=$_.Name; Display=$_.DisplayName
+            Status=[string]$_.Status; StartType=[string]$_.StartType
+        })
+    }
+
+    $jsonPath = Write-LocalCollectorJson -winData $winData -eqServices $eqSvcs -OutDir $colDir
+    Write-Host "  Exported: $jsonPath" -ForegroundColor Green
+    Write-Host "`n[LOCAL COLLECTOR] Complete. Copy this JSON to your CollectedResults folder on the main scanner server.`n" -ForegroundColor White
+}
+
+# ============================================================
+# RUN-BUILD-COMBINED - Import collector JSONs + SQL, build combined report
+# ============================================================
+function Run-BuildCombined {
+    Write-Host "`n[BUILD COMBINED] Loading data..." -ForegroundColor Cyan
+    $stamp  = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $outDir = Join-Path $OutputRoot "${hostname}_${stamp}_Combined"
+    Ensure-Dir $OutputRoot; Ensure-Dir $outDir
+
+    # Get SQL data (same as After)
+    $data = Collect-Data -SaveRawTo $outDir
+
+    # Discover servers from SQL
+    $serverNames = @($data.Components | Select-Object -ExpandProperty SystemName -Unique |
+                     Where-Object { $_ -ne 'Unknown System' } | Sort-Object)
+
+    # Import all JSON files from CollectedResults folder
+    $colDir = $script:Settings.CollectedResultsFolder
+    $importedScans = @{}
+    $unmatchedImports = [System.Collections.Generic.List[object]]::new()
+    if (Test-Path $colDir) {
+        $jsonFiles = @(Get-ChildItem $colDir -Filter 'AsInstalledScanner_*.json' -File -ErrorAction SilentlyContinue)
+        if ($jsonFiles.Count -gt 0) {
+            Write-Host "  [Import] Found $($jsonFiles.Count) collector JSON file(s) in $colDir" -ForegroundColor Cyan
+        }
+        foreach ($jf in $jsonFiles) {
+            $imported = Import-CollectorJson -File $jf
+            if ($imported) {
+                $sn = $imported.ServerName
+                # Try to match to a discovered server
+                $matched = $serverNames | Where-Object { $_ -ieq $sn -or $_.Split('.')[0] -ieq $sn.Split('.')[0] } | Select-Object -First 1
+                if ($matched) {
+                    Write-Host "    Matched: $sn -> $matched$(if($imported.Stale){' [STALE]'})" -ForegroundColor $(if($imported.Stale){'Yellow'}else{'Green'})
+                    $importedScans[$matched] = $imported
+                } else {
+                    Write-Host "    Unmatched import: $sn (not in SQL topology)" -ForegroundColor Yellow
+                    $imported.Method = 'LocalCollector-Unmatched'
+                    $unmatchedImports.Add($imported)
+                    # Still add to serverNames so it appears in the report
+                    $serverNames = @($serverNames) + @($sn) | Select-Object -Unique | Sort-Object
+                    $importedScans[$sn] = $imported
+                }
+            }
+        }
+    }
+
+    # Build remoteScans: prefer imported JSON, then WinRM if mode allows, mark sql-only otherwise
+    $remoteScans = @{}
+    foreach ($sn in $serverNames) {
+        if ($importedScans.ContainsKey($sn)) {
+            $remoteScans[$sn] = $importedScans[$sn]
+        } else {
+            $isLocal = ($sn -ieq $hostname -or $sn -ieq $env:COMPUTERNAME)
+            if ($isLocal) {
+                $remoteScans[$sn] = @{ IsLocal=$true }
+            } else {
+                $remoteScans[$sn] = @{ IsLocal=$false; Success=$false; Error='No collector data'; Method='SQLOnly' }
+            }
+        }
+    }
+
+    $data.ServerNames = $serverNames
+    $data.RemoteScans = $remoteScans
+
+    $txtFile = Write-FullTxt    -data $data -OutDir $outDir -mode 'After'
+               Write-SummaryTxt   -data $data -OutDir $outDir -mode 'After'
+               Write-MetadataJson -data $data -OutDir $outDir -mode 'After'
+    $null    = Write-HtmlReport   -data $data -OutDir $outDir -mode 'After' -fullTxtPath $txtFile
+
+    Write-Host "`n[BUILD COMBINED] Complete -> $outDir`n" -ForegroundColor Cyan
+    return $outDir
+}
+
+# ============================================================
 # MODE HANDLERS
 # ============================================================
 function Run-Before {
@@ -3104,14 +3516,56 @@ function Run-After {
 
     $data = Collect-Data -SaveRawTo $outDir
 
-    # Discover all servers from cas_installedsoftware and remote-scan each one
+    # Discover all servers from cas_installedsoftware and scan each one
     $serverNames = @($data.Components | Select-Object -ExpandProperty SystemName -Unique |
                      Where-Object { $_ -ne 'Unknown System' } | Sort-Object)
     if ($serverNames.Count -gt 0) {
         Write-Host "  [Remote] Discovered $($serverNames.Count) server(s): $($serverNames -join ', ')" -ForegroundColor Cyan
+        $scanMode = $script:Settings.RemoteScanMode
+        Write-Host "  [Remote] Scan mode: $scanMode" -ForegroundColor DarkCyan
+
+        # Prepare WinRM credential if needed
+        $winCred = $null
+        if ($scanMode -eq 'winrm' -and $script:Settings.WinRmAccountType -eq 'supplied' -and $script:Settings.WinRmAccount) {
+            try { $winCred = Get-Credential -UserName $script:Settings.WinRmAccount -Message "Enter password for $($script:Settings.WinRmAccount) (WinRM access)" }
+            catch { Write-Host "  [!] Credential prompt cancelled, using current user." -ForegroundColor Yellow }
+        }
+
+        # Check for collector JSONs
+        $colDir = $script:Settings.CollectedResultsFolder
+        $importedScans = @{}
+        if (Test-Path $colDir) {
+            foreach ($sn in $serverNames) {
+                $jf = Find-CollectorJson -ServerName $sn
+                if ($jf) {
+                    $imp = Import-CollectorJson -File $jf
+                    if ($imp) {
+                        $importedScans[$sn] = $imp
+                        Write-Host "    [Import] $sn <- $($jf.Name)$(if($imp.Stale){' [STALE]'})" -ForegroundColor $(if($imp.Stale){'Yellow'}else{'DarkGreen'})
+                    }
+                }
+            }
+        }
+
         $remoteScans = @{}
         foreach ($sn in $serverNames) {
-            $remoteScans[$sn] = Collect-RemoteServerData -ServerName $sn
+            if ($importedScans.ContainsKey($sn)) {
+                # Prefer imported collector JSON
+                $remoteScans[$sn] = $importedScans[$sn]
+            } elseif ($scanMode -eq 'sql-only') {
+                $isLocal = ($sn -ieq $hostname -or $sn -ieq $env:COMPUTERNAME)
+                if ($isLocal) {
+                    $remoteScans[$sn] = @{ IsLocal=$true }
+                } else {
+                    $remoteScans[$sn] = @{ IsLocal=$false; Success=$false; Error='Not scanned - SQL-only mode'; Method='SQLOnly' }
+                }
+            } else {
+                # winrm mode
+                $remoteScans[$sn] = Collect-RemoteServerData -ServerName $sn -Credential $winCred
+                if ($remoteScans[$sn] -and -not $remoteScans[$sn].IsLocal -and $remoteScans[$sn].Success) {
+                    $remoteScans[$sn].Method = 'WinRM'
+                }
+            }
         }
         $data.ServerNames = $serverNames
         $data.RemoteScans = $remoteScans
@@ -3156,8 +3610,11 @@ function Run-Full {
 if ($Mode -eq '') { $Mode = Show-Menu }
 
 switch ($Mode) {
-    'Before'  { Run-Before }
-    'After'   { Run-After  }
-    'Compare' { Run-Compare }
-    'Full'    { Run-Full   }
+    'Before'        { Run-Before        }
+    'After'         { Run-After         }
+    'Compare'       { Run-Compare       }
+    'Full'          { Run-Full          }
+    'LocalCollector'{ Run-LocalCollector }
+    'BuildCombined' { Run-BuildCombined  }
+    'Settings'      { Run-Settings       }
 }
