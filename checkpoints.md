@@ -2,13 +2,22 @@
 
 ---
 
-## CURRENT CHECKPOINT — 2026-05-06 (Session 10)
+## CURRENT CHECKPOINT — 2026-05-07 (Sessions 14)
 
 ### Completed
-- **Fixed Windows summary cards** — root cause: `HE (if ($wd) {...})` pattern fails because `if` is
-  treated as a command name when PowerShell evaluates the expression in certain contexts (e.g. SSH).
-  Fix: replaced with inline `$(HE $data.WinData.Platform)` subexpression pattern matching EQ cards.
-  Verified on CSTEMP: Platform=Virtual Machine, OS=Microsoft WS 2022 Standard Evaluation, RAM=8 GB, Queues=5.
+- **Fixed Print Behavior stale value** - `cas||casdownaction` reads from DRE (authoritative), not DCE cache.
+- **Redesigned Authentication section** - Device Clients (nested sub-rows), Workstation Clients and Web Client, Equitrac Authentication (checkbox flags), Card Registration.
+- **Added Global Network Settings section** - 4 cards: Backward Compatibility, Domain Qualification, SMTP Mail Server (summary + expandable per-server), SNMP Configuration (summary + expandable per-config, v1/v2c vs v3, passwords masked).
+- **Fixed SNMP polling interval** - key is `dre||dmepolltime` (seconds / 60 = minutes).
+- **Fixed SNMP protocol labels** - AuthProtocol 1=MD5/2=SHA1, PrivProtocol 1=AES-128/2=DES.
+- **Fixed Domain Qualification default domain** - key is `cas||domainqualif`, not `dce||defaultdomainqualif`.
+- **Removed legacy SMTP/Email section** - superseded by Global Network Settings SMTP card.
+- **Added Directory Services Synchronization section** - Active Directory card with per-server collapsible panel (DC, partition, masked auth, container-level flags, per-container Filtering/Field Mappings/Sync).
+- **Added LDAP section** - per-server cards from `cas_config.LDAPSettingsDoc` via `Get-CasConfigAttr`; shows connection info (server, port, base DN, login ID, masked password, LDAP version, SSL), Filtering, Field Mappings (incl. AccountNameAlt/DisplayNameAlt/DisplayNameAlt2), Synchronization.
+- **Added Microsoft Entra ID section** - from `cas_config.AzureADSettingsDoc`; blue header with Configured/Unknown status badge, last import time, enforce-limits flag, Differential Import (adds/changes/deletes, auto sync, interval, sync on save), Full Import, Field Mappings.
+- **Promoted all HTML helpers to script scope** - AG, NG, ARow, ARowH, ARS1, ARS2, SecLbl, ATable, DCOn, DCEnI, YNo, CBx, AVMap, AVMapH, NRow, NTable, NRS1, NOn, NCB, NMask now available to all Build-* functions.
+- **Fixed em-dash encoding bug** - replaced U+2014 with ASCII hyphen throughout to prevent Windows PowerShell 5.1 misreading UTF-8 bytes as CP1252 closing-quote.
+- Commits: `28c761f`, `620b728`, `feac9c9`, `4b46557`, `45aac65`, `825dac6`, `8368e85`, `d55026c`.
 
 ### Pending
 - Add `cas||workflowfolderslastupdatetime` to `$EQVarNoise` (false-positive suppression in Compare mode)
