@@ -666,18 +666,23 @@ function Collect-Data {
     }
 
     Write-Host '  [3/5] Parsing components...' -ForegroundColor Cyan
+    # cas_installedsoftware columns: name|systemname|systemhostname|extrainfo|virtualsystemname|version|lastconnected
     $components = [System.Collections.Generic.List[object]]::new()
     foreach ($line in $bcp['cas_installedsoftware']) {
         $f = $line -split '\|'
         $comp = $f[0].Trim()
         if ($comp -eq '') { continue }
+        $sysName = if ($f.Count -gt 1 -and $f[1].Trim()) { $f[1].Trim() } else { 'Unknown System' }
         $components.Add([PSCustomObject]@{
-            Name    = $comp
-            Desc    = if ($f.Count -gt 3) { $f[3].Trim() } else { '' }
-            Version = if ($f.Count -gt 5) { $f[5].Trim() } else { '' }
-            Date    = if ($f.Count -gt 6) { $f[6].Trim() } else { '' }
+            Name       = $comp
+            SystemName = $sysName
+            ExtraInfo  = if ($f.Count -gt 3) { $f[3].Trim() } else { '' }
+            Version    = if ($f.Count -gt 5) { $f[5].Trim() } else { '' }
+            LastUsed   = if ($f.Count -gt 6) { $f[6].Trim() } else { '' }
         })
     }
+    # Sort by SystemName then component Name for consistent grouping
+    $components = [System.Collections.Generic.List[object]]($components | Sort-Object SystemName, Name)
 
     Write-Host '  [4/5] Parsing price lists, workflows, users...' -ForegroundColor Cyan
 
@@ -1224,11 +1229,16 @@ function Write-FullTxt {
     WH "INSTALLED COMPONENTS"
     if ($data.Components.Count -eq 0) { W "  (none)" }
     else {
+        $lastSys = $null
         foreach ($c in $data.Components) {
+            if ($c.SystemName -ne $lastSys) {
+                W ''; W "  === $($c.SystemName) ==="
+                $lastSys = $c.SystemName
+            }
             $s = "  $($c.Name)"
-            if ($c.Desc)    { $s += "  ($($c.Desc))" }
-            if ($c.Version) { $s += "  v$($c.Version)" }
-            if ($c.Date)    { $s += "  [$($c.Date)]" }
+            if ($c.ExtraInfo) { $s += "  ($($c.ExtraInfo))" }
+            if ($c.Version)   { $s += "  v$($c.Version)" }
+            if ($c.LastUsed)  { $s += "  Last Used: $($c.LastUsed)" }
             W $s
         }
     }
@@ -1339,7 +1349,7 @@ function Write-SummaryTxt {
     W "Precision   : $(FV ($data.KeyValues['cas||precision']))"
     W ''
     W '--- INSTALLED COMPONENTS ---'
-    foreach ($c in $data.Components) { W "  $($c.Name)  v$($c.Version)" }
+    foreach ($c in $data.Components) { W "  [$($c.SystemName)]  $($c.Name)  v$($c.Version)  Last Used: $($c.LastUsed)" }
     W ''
     W '--- PRICE LISTS ---'
     foreach ($pl in $data.PriceLists) {
@@ -1365,7 +1375,7 @@ function Write-MetadataJson {
     $smtp = if ($data.SmtpServer) { "$($data.SmtpServer):$($data.SmtpPort)" } else { '' }
     # Build component array
     $compArr = ($data.Components | ForEach-Object {
-        "    {`"name`":`"$($_.Name)`",`"version`":`"$($_.Version)`"}"
+        "    {`"name`":`"$($_.Name)`",`"systemName`":`"$($_.SystemName)`",`"version`":`"$($_.Version)`",`"lastUsed`":`"$($_.LastUsed)`"}"
     }) -join ",`n"
     $plArr = ($data.PriceLists | ForEach-Object {
         $rateStr = ($_.Rates | ForEach-Object { "`"$_`"" }) -join ','
@@ -2296,13 +2306,34 @@ function Write-HtmlReport {
         $winHtml += New-HtmlSection 'win-drivers' 'Printer Drivers and Ports' $drvBody
     }
 
-    # --- Components section ---
-    $compRows = [System.Collections.Generic.List[object]]::new()
-    foreach ($c in $data.Components) {
-        $lbl = $c.Name; if ($c.Desc) { $lbl += " ($($c.Desc))" }
-        $compRows.Add([PSCustomObject]@{ K=$lbl; V="v$($c.Version)  [$($c.Date)]" })
+    # --- Components section (grouped by SystemName) ---
+    $compBody = ''
+    if ($data.Components.Count -eq 0) {
+        $compBody = "<p style='color:#aaa;padding:8px'>No components found.</p>"
+    } else {
+        # Group by SystemName
+        $sysGroups = @{}
+        $sysOrder  = [System.Collections.Generic.List[string]]::new()
+        foreach ($c in $data.Components) {
+            if (-not $sysGroups.ContainsKey($c.SystemName)) {
+                $sysGroups[$c.SystemName] = [System.Collections.Generic.List[object]]::new()
+                $sysOrder.Add($c.SystemName)
+            }
+            $sysGroups[$c.SystemName].Add($c)
+        }
+        foreach ($sys in $sysOrder) {
+            $compBody += "<div class='comp-sys-hdr'>&#128187; $(HE $sys)</div>"
+            $compBody += "<table class='comp-tbl'>"
+            $compBody += "<tr class='comp-th'><th>Component</th><th>Version</th><th>Last Used</th></tr>"
+            foreach ($c in $sysGroups[$sys]) {
+                $compName = HE $c.Name
+                if ($c.ExtraInfo) { $compName += " <span class='comp-extra'>($(HE $c.ExtraInfo))</span>" }
+                $compBody += "<tr><td>$compName</td><td class='comp-ver'>$(HE $c.Version)</td><td class='comp-date'>$(HE $c.LastUsed)</td></tr>"
+            }
+            $compBody += "</table>"
+        }
     }
-    $compSection = New-HtmlSection 'components' 'Installed Components' (New-KVTable $compRows)
+    $compSection = New-HtmlSection 'components' "Installed Components ($($data.Components.Count))" $compBody
 
     # --- Watched key sections ---
     $keyHtml = ''
@@ -2444,6 +2475,15 @@ table.kv .v{color:#111}
 table.kv .v.e{color:#bbb;font-style:italic}
 .sub{margin-top:10px;margin-bottom:5px;font-size:11px;font-weight:bold;color:#666;text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid #eee;padding-bottom:3px}
 .inst-hdr{margin-top:14px;margin-bottom:6px;padding:7px 12px;background:#1a2744;color:#fff;border-radius:5px;font-size:12px;font-weight:bold;letter-spacing:.4px}
+.comp-sys-hdr{margin:14px 0 0;padding:7px 12px;background:#1a3a8a;color:#fff;border-radius:6px 6px 0 0;font-size:12px;font-weight:700;letter-spacing:.3px}
+table.comp-tbl{width:100%;border-collapse:collapse;margin-bottom:4px;border:1px solid #c5d0e8;border-top:none;border-radius:0 0 6px 6px;overflow:hidden}
+table.comp-tbl tr.comp-th th{background:#eef3fb;color:#3a4a6a;font-size:10px;text-transform:uppercase;letter-spacing:.3px;padding:5px 10px;border-bottom:1px solid #d4dff0;text-align:left;font-weight:700}
+table.comp-tbl td{padding:5px 10px;border-bottom:1px solid #f0f2f6;font-size:12px;vertical-align:top}
+table.comp-tbl tr:last-child td{border-bottom:none}
+table.comp-tbl tr:hover td{background:#f4f7ff}
+.comp-ver{color:#2a6496;font-family:Consolas,monospace;white-space:nowrap}
+.comp-date{color:#666;white-space:nowrap;font-size:11px}
+.comp-extra{color:#888;font-size:11px;font-weight:normal}
 .auth-grp{margin-top:12px;margin-bottom:6px;padding:5px 10px;background:#eef2ff;border-left:3px solid #1a56db;border-radius:0 4px 4px 0;font-size:11px;font-weight:bold;color:#1a3a8a;text-transform:uppercase;letter-spacing:.3px}
 table.hid-tbl{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:6px}
 table.hid-tbl th{background:#f0f4f8;color:#555;font-size:10px;text-transform:uppercase;letter-spacing:.3px;padding:5px 10px;border:1px solid #e0e4ea;text-align:left;font-weight:600}
