@@ -2,7 +2,7 @@
 
 ---
 
-## CURRENT CHECKPOINT — 2026-05-07 (Sessions 14)
+## CURRENT CHECKPOINT — 2026-05-07 (Sessions 14-15)
 
 ### Completed
 - **Fixed Print Behavior stale value** - `cas||casdownaction` reads from DRE (authoritative), not DCE cache.
@@ -17,12 +17,16 @@
 - **Added Microsoft Entra ID section** - from `cas_config.AzureADSettingsDoc`; blue header with Configured/Unknown status badge, last import time, enforce-limits flag, Differential Import (adds/changes/deletes, auto sync, interval, sync on save), Full Import, Field Mappings.
 - **Promoted all HTML helpers to script scope** - AG, NG, ARow, ARowH, ARS1, ARS2, SecLbl, ATable, DCOn, DCEnI, YNo, CBx, AVMap, AVMapH, NRow, NTable, NRS1, NOn, NCB, NMask now available to all Build-* functions.
 - **Fixed em-dash encoding bug** - replaced U+2014 with ASCII hyphen throughout to prevent Windows PowerShell 5.1 misreading UTF-8 bytes as CP1252 closing-quote.
-- Commits: `28c761f`, `620b728`, `feac9c9`, `4b46557`, `45aac65`, `825dac6`, `8368e85`, `d55026c`.
+- **Improved Users/Accounts section** - summary tiles for Total Accounts/Billing Codes/Departments; PIN usage counts (Primary, Alternate, Any); Secondary PIN marked "Unable to verify" (sentinel hash `3CE59CD2B1F5525CFB84E3B1C10F8942` on all DB rows makes it unreliable); 10-row sample user table with raw HTML to avoid double-encoding.
+- **Fixed BCP null-byte corruption** - `Get-BcpLines` now reads file as ASCII and strips `\x00` bytes globally; affected `primarypin` NULL fields returning `"\0"` (non-empty) instead of empty string.
+- **Improved Installed Components section** - added SystemName (f[1] from `cas_installedsoftware`, was ignored); renamed Desc->ExtraInfo, Date->LastUsed; HTML groups rows by system under dark blue headers; FULL.txt groups under `=== SystemName ===`; metadata JSON includes `systemName`/`lastUsed`. Tested: CSTEMP (8 comps) and DC02-MAIN (6 comps).
+- Commits: `28c761f`, `620b728`, `feac9c9`, `4b46557`, `45aac65`, `825dac6`, `8368e85`, `d55026c`, `d54dc5f`, `479de8c`, `38d64ad`.
 
 ### Pending
 - Add `cas||workflowfolderslastupdatetime` to `$EQVarNoise` (false-positive suppression in Compare mode)
 - Continue UI change mapping: device registration, license seats, user card enrolment, report config
 - Push to `skyconasia-ux/AsInstalledScannerUtility`
+- (Future) Replace raw datetime strings in Last Used / sync timestamps with formatted dates
 
 ---
 
