@@ -1254,154 +1254,169 @@ function Write-FullTxt {
     W "Generated : $($data.Timestamp)"
     W "Mode      : $mode"
 
-    # ---- Windows Server sections ----
+    # ---- Windows Servers (per-server, MultiC) ----
+    # Helper to write Windows data for one server
+    function Write-WinServerTxt {
+        param([string]$ServerName, [string]$ScanMethod, $wd, $isLocal)
+        WS "Server: $ServerName [$ScanMethod]"
+        if (-not $wd) { W "    (no scan data)"; return }
+
+        W "  --- System Identity ---"
+        WF '  Computer Name'  $wd.ComputerName
+        if ($wd.PSObject.Properties['Manufacturer']) { WF '  Manufacturer' $wd.Manufacturer }
+        if ($wd.PSObject.Properties['Model'])        { WF '  Model'        $wd.Model }
+        if ($isLocal) {
+            WF '  Platform'   $wd.Platform
+            if ($wd.PSObject.Properties['Hypervisor'] -and $wd.Hypervisor) { WF '  Hypervisor' $wd.Hypervisor }
+            WF '  UUID'       $wd.UUID
+            WF '  BIOS Ver'   $wd.BiosVersion
+        }
+        if ($wd.PSObject.Properties['BiosSerial'])   { WF '  BIOS Serial' $wd.BiosSerial }
+
+        W "  --- Operating System ---"
+        WF '  OS Name'    $wd.OsName
+        WF '  OS Version' $wd.OsVersion
+        if ($isLocal) {
+            if ($wd.PSObject.Properties['OsArch'])    { WF '  Architecture' $wd.OsArch }
+            if ($wd.PSObject.Properties['OsInstall']) { WF '  Install Date' $wd.OsInstall }
+        }
+
+        W "  --- Hardware and Storage ---"
+        WF '  RAM'  $wd.Ram
+        WF '  CPU'  $wd.CpuName
+        if ($wd.PSObject.Properties['CpuCores'])   { WF '  Cores'   $wd.CpuCores }
+        if ($isLocal -and $wd.PSObject.Properties['CpuThreads']) { WF '  Threads' $wd.CpuThreads }
+        if ($wd.PSObject.Properties['Drives']) {
+            foreach ($d in $wd.Drives) { WF "  Drive $($d.Name)" "$($d.Total) GB total, $($d.Used) GB used, $($d.Free) GB free" }
+        }
+
+        W "  --- Network ---"
+        $nicsArr = if ($wd.PSObject.Properties['Nics']) { $wd.Nics } else { @() }
+        foreach ($n in $nicsArr) {
+            $nd = if ($n.PSObject.Properties['Desc']) { $n.Desc } else { 'NIC' }
+            W "    [$nd]"
+            if ($n.PSObject.Properties['IP']      -and $n.IP)      { WF '    IP'      $n.IP }
+            if ($n.PSObject.Properties['Subnet']  -and $n.Subnet)  { WF '    Subnet'  $n.Subnet }
+            if ($n.PSObject.Properties['Gateway'] -and $n.Gateway) { WF '    Gateway' $n.Gateway }
+            if ($n.PSObject.Properties['DNS']     -and $n.DNS)     { WF '    DNS'     $n.DNS }
+            if ($n.PSObject.Properties['Mac']     -and $n.Mac)     { WF '    MAC'     $n.Mac }
+        }
+
+        W "  --- Domain ---"
+        if ($wd.PSObject.Properties['DomainName']) { WF '  Domain' $wd.DomainName }
+        if ($wd.PSObject.Properties['DomainJoined']) {
+            WF '  Domain Joined' $(if ($wd.DomainJoined) { "Yes ($($wd.DomainName))" } else { 'No' })
+        }
+
+        if ($isLocal) {
+            W "  --- Installed Print Management Software ---"
+            $pmA = if ($wd.PSObject.Properties['PmApps']) { $wd.PmApps } else { @() }
+            if ($pmA.Count -eq 0) { W '    (none detected)' }
+            else {
+                foreach ($a in $pmA) {
+                    WF "    Product"  $a.Name
+                    if ($a.Version)   { WF "    Version" $a.Version }
+                    if ($a.SvcStatus) { WF "    Service" $a.SvcStatus }
+                    if ($a.Path)      { WF "    Path"    $a.Path }
+                }
+            }
+        }
+
+        W "  --- Windows Roles and Features ---"
+        if ($isLocal) {
+            if ($wd.PSObject.Properties['DotNet35'])       { WF '  .NET 3.5'        $wd.DotNet35 }
+            if ($wd.PSObject.Properties['DotNet48'])       { WF '  .NET 4.8'        $wd.DotNet48 }
+            if ($wd.PSObject.Properties['PrintRoleStatus']){ WF '  Print Role'      $wd.PrintRoleStatus }
+            if ($wd.PSObject.Properties['SpoolerStatus'])  { WF '  Spooler'         $wd.SpoolerStatus }
+            if ($wd.PSObject.Properties['SpoolFolder'])    { WF '  Spool Folder'    $wd.SpoolFolder }
+            $iRoles = if ($wd.PSObject.Properties['InstalledRoles']) { $wd.InstalledRoles } else { @() }
+            foreach ($r in $iRoles)    { W "    [Role]    $r" }
+            $iFeat  = if ($wd.PSObject.Properties['InstalledFeatures']) { $wd.InstalledFeatures } else { @() }
+            foreach ($f in $iFeat)     { W "    [Feature] $f" }
+        } else {
+            $iRoles = if ($wd.PSObject.Properties['InstalledRoles']) { $wd.InstalledRoles } else { @() }
+            if ($iRoles.Count -gt 0) { foreach ($r in $iRoles) { W "    [Role] $r" } }
+            else { W '    (no role data from remote scan)' }
+        }
+
+        W "  --- SQL Server ---"
+        if ($isLocal) {
+            $sqlI = if ($wd.PSObject.Properties['SqlInstances']) { $wd.SqlInstances } else { @() }
+            if ($sqlI.Count -eq 0) { W '    None detected' }
+            else {
+                foreach ($si in $sqlI) {
+                    W "    Instance: $($si.Name)"
+                    WF '    Edition'         $si.Edition
+                    WF '    Version'         $si.Version
+                    WF '    Service'         $si.Status
+                    WF '    Service Account' $si.ServiceAcct
+                    WF '    Auth Mode'       $si.AuthMode
+                    WF '    Named Pipes'     "$(if($si.NpEnabled){'Enabled'}else{'Disabled'})"
+                    WF '    TCP/IP'          "$(if($si.TcpEnabled){'Enabled'}else{'Disabled'})  Port=$($si.TcpPort)"
+                }
+            }
+        } else {
+            $sqlSv = if ($wd.PSObject.Properties['SqlServices']) { $wd.SqlServices } else { @() }
+            if ($sqlSv.Count -gt 0) { foreach ($sv in $sqlSv) { W "    $sv" } }
+            else { W '    (no SQL services detected)' }
+        }
+
+        W "  --- Print Queues ---"
+        $pqs2 = if ($wd.PSObject.Properties['PrintQueues']) { $wd.PrintQueues } else { @() }
+        if ($pqs2.Count -eq 0) { W '    (none)' }
+        elseif ($isLocal) {
+            if ($wd.PSObject.Properties['SpoolFolder']) { WF '  Spool Folder' $wd.SpoolFolder }
+            foreach ($q in $pqs2) {
+                W "    Queue: $($q.Name)"
+                if ($q.PSObject.Properties['Driver'])  { WF '    Driver' $q.Driver }
+                if ($q.PSObject.Properties['Port'])    { WF '    Port'   $q.Port }
+                if ($q.PSObject.Properties['Status'])  { WF '    Status' $q.Status }
+                if ($q.Shared) { WF '    Shared' "Yes (ShareName: $($q.ShareName))" } else { W '    Shared: No' }
+            }
+        } else {
+            foreach ($q in $pqs2) {
+                $drvName = if ($q.PSObject.Properties['DriverName']) { $q.DriverName } elseif ($q.PSObject.Properties['Driver']) { $q.Driver } else { '' }
+                W "    $($q.Name)  Driver=$drvName  Port=$($q.Port)"
+            }
+        }
+
+        if ($isLocal) {
+            W "  --- Printer Drivers ---"
+            $d64 = if ($wd.PSObject.Properties['DriversX64']) { $wd.DriversX64 } else { @() }
+            $d86 = if ($wd.PSObject.Properties['DriversX86']) { $wd.DriversX86 } else { @() }
+            W "    x64 drivers ($($d64.Count)):"
+            $d64 | Sort-Object Name | ForEach-Object { W "      $($_.Name)" }
+            W "    x86 drivers ($($d86.Count)):"
+            $d86 | Sort-Object Name | ForEach-Object { W "      $($_.Name)" }
+
+            W "  --- Printer Ports ---"
+            $pp = if ($wd.PSObject.Properties['PrinterPorts']) { $wd.PrinterPorts } else { @() }
+            foreach ($pt in $pp) {
+                $line = "    $($pt.Name)"
+                if ($pt.IP)   { $line += "  IP=$($pt.IP)" }
+                if ($pt.Port) { $line += "  Port=$($pt.Port)" }
+                W $line
+            }
+        }
+    }
+
+    WH "WINDOWS SERVERS"
+    # Primary server
     if ($data.WinData) {
-        $w2 = $data.WinData
-        WH "SYSTEM IDENTITY"
-        WF 'Computer Name'  $w2.ComputerName
-        WF 'Manufacturer'   $w2.Manufacturer
-        WF 'Model'          $w2.Model
-        WF 'Platform'       $w2.Platform
-        if ($w2.Hypervisor) { WF 'Hypervisor' $w2.Hypervisor }
-        WF 'UUID'           $w2.UUID
-        WF 'BIOS Version'   $w2.BiosVersion
-        WF 'BIOS Serial'    $w2.BiosSerial
-
-        WH "OPERATING SYSTEM"
-        WF 'OS Name'        $w2.OsName
-        WF 'OS Version'     $w2.OsVersion
-        WF 'Architecture'   $w2.OsArch
-        WF 'Install Date'   $w2.OsInstall
-
-        WH "HARDWARE AND STORAGE"
-        WF 'RAM'            $w2.Ram
-        WF 'CPU'            $w2.CpuName
-        WF 'Cores'          $w2.CpuCores
-        WF 'Threads'        $w2.CpuThreads
-        WS "Drives"
-        foreach ($d in $w2.Drives) { WF "  Drive $($d.Name)" "$($d.Total) GB total, $($d.Used) GB used, $($d.Free) GB free" }
-
-        WH "NETWORK"
-        foreach ($n in $w2.Nics) {
-            WS $n.Desc
-            WF '  IP'        $n.IP
-            WF '  Subnet'    $n.Subnet
-            WF '  Gateway'   $n.Gateway
-            WF '  DNS'       $n.DNS
-            WF '  DHCP'      $n.DHCP
-            WF '  MAC'       $n.Mac
-            WF '  Speed'     $n.Speed
-            WF '  NetBIOS'   $n.NetBIOS
-        }
-
-        WH "DOMAIN"
-        WF 'Domain'         $w2.DomainName
-        WF 'Domain Joined'  $(if ($w2.DomainJoined) { "Yes ($($w2.DomainName))" } else { 'No' })
-
-        WH "INSTALLED PRINT MANAGEMENT SOFTWARE"
-        if ($w2.PmApps.Count -eq 0) { W '  (none detected)' }
-        else {
-            foreach ($a in $w2.PmApps) {
-                WF "  Product"  $a.Name
-                if ($a.Version)   { WF "  Version"   $a.Version }
-                if ($a.SvcStatus) { WF "  Service"   $a.SvcStatus }
-                if ($a.Path)      { WF "  Path"      $a.Path }
-                W ''
-            }
-        }
-
-        WH "WINDOWS ROLES AND FEATURES"
-        WF '.NET 3.5'       $w2.DotNet35
-        WF '.NET 4.8'       $w2.DotNet48
-        WF 'Print Server Role' $w2.PrintRoleStatus
-        WF 'Spooler'        $w2.SpoolerStatus
-        WF 'Spool Folder'   $w2.SpoolFolder
-        WS "Installed Roles"
-        foreach ($r in $w2.InstalledRoles)    { W "  [Role]    $r" }
-        WS "Installed Features"
-        foreach ($f in $w2.InstalledFeatures) { W "  [Feature] $f" }
-
-        WH "SQL SERVER INSTANCES"
-        if ($w2.SqlInstances.Count -eq 0) { W '  None detected' }
-        else {
-            foreach ($si in $w2.SqlInstances) {
-                WS "Instance: $($si.Name)"
-                WF '  Edition'          $si.Edition
-                WF '  Version'          $si.Version
-                WF '  Service'          $si.Status
-                WF '  Service Account'  $si.ServiceAcct
-                WF '  Auth Mode'        $si.AuthMode
-                WF '  Install Path'     $si.InstallPath
-                WF '  Data Root'        $si.DataRoot
-                WF '  Default Data Dir' $si.DefaultData
-                WF '  Default Log Dir'  $si.DefaultLog
-                WF '  Backup Dir'       $si.BackupDir
-                WF '  Error Log'        $si.ErrorLog
-                WF '  Named Pipes'      "$(if($si.NpEnabled){'Enabled'}else{'Disabled'})"
-                WF '  TCP/IP'           "$(if($si.TcpEnabled){'Enabled'}else{'Disabled'})  Port=$($si.TcpPort)"
-                WF '  TCP Keep Alive'   $si.TcpKeepAlive
-                WF '  TCP Listen All'   $si.TcpListenAll
-                if ($si.TcpIpAddrs.Count -gt 0) {
-                    W '  TCP IP Addresses:'
-                    foreach ($ip in $si.TcpIpAddrs) {
-                        W "    $($ip.Name) [$($ip.IP)]: Active=$($ip.Active) Enabled=$($ip.Enabled) Port=$($ip.Port)"
-                    }
-                }
-                WF '  FILESTREAM'       $si.FsDesc
-                WF '  Max Memory'       $si.MaxMemoryMB
-                WF '  Min Memory'       $si.MinMemoryMB
-                WF '  User Instances'   $si.UserInstances
-                if ($si.SysAdmins.Count -gt 0) {
-                    W '  Sysadmin Members:'
-                    foreach ($a in $si.SysAdmins) { W "    $a" }
-                }
-                if ($si.TempDbFiles.Count -gt 0) {
-                    W '  TempDB Files:'
-                    foreach ($tf in $si.TempDbFiles) {
-                        W "    [$($tf.Type)] $($tf.Name): $($tf.Path)  Size=$($tf.SizeMB) MB  Growth=$($tf.Growth)"
-                    }
-                }
-            }
-        }
-
-        WH "PRINT QUEUES ($($w2.PrintQueues.Count) total)"
-        WF 'Spool Folder'   $w2.SpoolFolder
-        foreach ($q in $w2.PrintQueues) {
-            WS "Queue: $($q.Name)"
-            WF '  Driver'           $q.Driver
-            WF '  Port'             $q.Port
-            WF '  Status'           $q.Status
-            WF '  Paper Size'       $q.PaperSize
-            WF '  Duplex'           $q.Duplex
-            WF '  Color'            $q.Color
-            WF '  Advanced Features'$q.AdvFeatures
-            WF '  Render on Client' $q.RenderOnClient
-            WF '  Use App Color'    $q.ColorMgmt
-            WF '  ICM Method'       $q.IcmMethod
-            WF '  Shared'           $(if ($q.Shared) { "Yes (ShareName: $($q.ShareName))" } else { 'No' })
-            WF '  Published in AD'  $(if ($q.Published) { 'Yes' } else { 'No' })
-            WF '  x86 Driver'       $(if ($q.Has32bit) { 'Installed' } else { 'Not installed' })
-            if ($q.FinisherInst) {
-                WF '  Finisher'         $q.FinisherInst
-                WF '  Staple Installed' $q.StapleInst
-                WF '  Punch Installed'  $q.PunchInst
-                WF '  Booklet Maker'    $q.BookletInst
-                WF '  Offset Stacking'  $q.OffsetInst
-            }
-        }
-
-        WH "PRINTER DRIVERS"
-        W "  x64 drivers ($($w2.DriversX64.Count)):"
-        $w2.DriversX64 | Sort-Object Name | ForEach-Object { W "    $($_.Name)" }
-        W "  x86 drivers ($($w2.DriversX86.Count)):"
-        $w2.DriversX86 | Sort-Object Name | ForEach-Object { W "    $($_.Name)" }
-
-        WH "PRINTER PORTS ($($w2.PrinterPorts.Count) total)"
-        foreach ($pt in $w2.PrinterPorts) {
-            $line = "  $($pt.Name)"
-            if ($pt.IP)   { $line += "  IP=$($pt.IP)" }
-            if ($pt.Port) { $line += "  Port=$($pt.Port)" }
-            W $line
+        Write-WinServerTxt -ServerName $data.Hostname -ScanMethod 'Primary scan' -wd $data.WinData -isLocal $true
+    }
+    # Remote servers
+    foreach ($sn in ($data.ServerNames | Sort-Object)) {
+        if ($sn -ine $data.Hostname) {
+            $sc  = if ($data.RemoteScans -and $data.RemoteScans.ContainsKey($sn)) { $data.RemoteScans[$sn] } else { $null }
+            $isL = $sc -and ($sc -is [hashtable]) -and $sc.IsLocal
+            if ($isL) { continue } # already covered above as primary
+            $mth = if ($sc) { if ($sc -is [hashtable] -and $sc.ContainsKey('Method')) { $sc.Method } elseif ($sc.PSObject.Properties['Method']) { $sc.Method } else { '' } } else { '' }
+            if (-not $mth) { $mth = if ($sc -and -not $sc.Success) { if ($sc.Error) { $sc.Error } else { 'Not scanned' } } else { 'WinRM' } }
+            $wd2 = if ($sc) { if ($sc -is [hashtable] -and $sc.ContainsKey('Data')) { $sc.Data } elseif ($sc.PSObject.Properties['Data']) { $sc.Data } else { $null } } else { $null }
+            $scanSuccess = if ($sc) { if ($sc -is [hashtable]) { $sc.Success } elseif ($sc.PSObject.Properties['Success']) { $sc.Success } else { $false } } else { $false }
+            if (-not $scanSuccess) { $wd2 = $null }
+            Write-WinServerTxt -ServerName $sn -ScanMethod $mth -wd $wd2 -isLocal $false
         }
     }
 
@@ -2210,6 +2225,395 @@ function Build-DirSyncHtml {
 }
 
 # ============================================================
+# BUILD WINDOWS SERVER SECTIONS (per-server, MultiC)
+# ============================================================
+function Build-WinSubHtml {
+    param([string]$ServerId, [string]$SubId, [string]$Title, [string]$Body)
+    $fid = "wsrv-${ServerId}-${SubId}"
+    return "<div class='win-sub-card'>" +
+           "<div class='win-sub-hdr' onclick=`"tog('$fid')`">" +
+           "<span class='win-sub-title'>$(HE $Title)</span>" +
+           "<span class='tog' id='t-$fid'>-</span>" +
+           "</div>" +
+           "<div class='sec-body' id='b-$fid'>$Body</div>" +
+           "</div>"
+}
+
+function Build-WinSectionsHtml {
+    param($data, [string]$ServerName, $scan)
+
+    $snId    = $ServerName -replace '[^a-zA-Z0-9]','-'
+    # Primary server: matches hostname, OR scan.IsLocal, OR no scan data at all
+    $isPrimaryHost = ($ServerName -ieq $data.Hostname -or $ServerName -ieq $env:COMPUTERNAME)
+    $isLocal = $isPrimaryHost -or
+               (-not $scan) -or
+               ($scan -is [hashtable]   -and $scan.IsLocal) -or
+               ($scan -isnot [hashtable] -and $scan.PSObject.Properties['IsLocal'] -and $scan.IsLocal)
+    $wd = $null
+    if ($isLocal) {
+        $wd = $data.WinData  # always use full WinData for primary server
+    } else {
+        $scanSuccess = if ($scan -is [hashtable]) { $scan.Success } elseif ($scan.PSObject.Properties['Success']) { $scan.Success } else { $false }
+        $scanData    = if ($scan -is [hashtable]) { $scan.Data    } elseif ($scan.PSObject.Properties['Data'])    { $scan.Data    } else { $null  }
+        if ($scanSuccess -and $scanData) { $wd = $scanData }
+    }
+
+    # Safe property reader - works on both hashtables and PSObjects
+    $GP = {
+        param($obj, $prop)
+        if ($null -eq $obj) { return $null }
+        if ($obj -is [hashtable]) { if ($obj.ContainsKey($prop)) { return $obj[$prop] } else { return $null } }
+        if ($obj.PSObject.Properties[$prop]) { return $obj.$prop }
+        return $null
+    }
+
+    # Method / badge / source label
+    $method = ''
+    if ($scan) {
+        $method = if ($scan -is [hashtable]) { if ($scan.ContainsKey('Method')) { $scan.Method } else { '' } }
+                  else { if ($scan.PSObject.Properties['Method']) { $scan.Method } else { '' } }
+    }
+    if (-not $method) { $method = '' }
+
+    $badge = if ($isPrimaryHost) {
+        "<span class='srv-badge srv-local'>Primary</span>"
+    } elseif ($method -eq 'LocalCollector') {
+        "<span class='srv-badge srv-collector'>Local Collector</span>"
+    } elseif ($method -eq 'LocalCollector-Unmatched') {
+        "<span class='srv-badge srv-unmatched'>Collector (Unmatched)</span>"
+    } elseif ($method -eq 'SQLOnly') {
+        "<span class='srv-badge srv-sqlonly'>SQL-only</span>"
+    } elseif ($scan -and $scan.Success) {
+        "<span class='srv-badge srv-ok'>WinRM OK</span>"
+    } else {
+        $em = if ($scan -and $scan.Error) { HE $scan.Error } else { 'Not scanned' }
+        "<span class='srv-badge srv-fail'>$em</span>"
+    }
+
+    $srcLabel = if ($isPrimaryHost) {
+        "<span class='win-src-lbl'>Primary scan</span>"
+    } elseif ($method -eq 'LocalCollector' -or $method -eq 'LocalCollector-Unmatched') {
+        "<span class='win-src-lbl'>Local Collector Import</span>"
+    } elseif ($method -eq 'WinRM') {
+        "<span class='win-src-lbl'>WinRM</span>"
+    } elseif ($method -eq 'SQLOnly') {
+        "<span class='win-src-lbl'>SQL-only detected</span>"
+    } else {
+        $el = if ($scan -and $scan.Error) { HE $scan.Error } else { 'Not scanned' }
+        "<span class='win-src-lbl'>$el</span>"
+    }
+
+    $importInfo  = ''
+    if (-not $isPrimaryHost) {
+        $collectedAt = if ($scan) { & $GP $scan 'CollectedAt' } else { $null }
+        $isStale     = if ($scan) { [bool](& $GP $scan 'Stale') } else { $false }
+        if ($collectedAt) {
+            $sw = if ($isStale) { " <span class='srv-scan-warn'>&#9888; Stale</span>" } else { '' }
+            $importInfo = "<div class='lc-import-info'>&#128190; Collected: $(HE $collectedAt)$sw</div>"
+        }
+    }
+
+    # ---- Build subsections ----
+    $subHtml = ''
+
+    if (-not $wd) {
+        $reason = if ($scan -and $scan.Error) { HE $scan.Error } else { 'Not scanned' }
+        $subHtml = "<div class='win-noscan'>&#9888; No Windows scan data available for this server.<br>Reason: $reason</div>"
+    } else {
+
+        # System Identity
+        $sysRows = [System.Collections.Generic.List[object]]::new()
+        $sysRows.Add([PSCustomObject]@{K='Computer Name'; V=(FV (& $GP $wd 'ComputerName'))})
+        $v = & $GP $wd 'Manufacturer'; if ($v) { $sysRows.Add([PSCustomObject]@{K='Manufacturer'; V=(FV $v)}) }
+        $v = & $GP $wd 'Model';        if ($v) { $sysRows.Add([PSCustomObject]@{K='Model';        V=(FV $v)}) }
+        if ($isLocal) {
+            $plat = & $GP $wd 'Platform'; $hyp = & $GP $wd 'Hypervisor'
+            if ($plat) { $sysRows.Add([PSCustomObject]@{K='Platform'; V=if($hyp){"$plat ($hyp)"}else{FV $plat}}) }
+            $v = & $GP $wd 'UUID';        if ($v) { $sysRows.Add([PSCustomObject]@{K='System UUID';  V=(FV $v)}) }
+            $v = & $GP $wd 'BiosVersion'; if ($v) { $sysRows.Add([PSCustomObject]@{K='BIOS Version'; V=(FV $v)}) }
+        }
+        $v = & $GP $wd 'BiosSerial'; if ($v) { $sysRows.Add([PSCustomObject]@{K='BIOS Serial'; V=(FV $v)}) }
+        $subHtml += Build-WinSubHtml $snId 'system' 'System Identity' (New-KVTable $sysRows)
+
+        # OS
+        $osRows = [System.Collections.Generic.List[object]]::new()
+        $osRows.Add([PSCustomObject]@{K='OS Name';    V=(FV (& $GP $wd 'OsName'))})
+        $osRows.Add([PSCustomObject]@{K='OS Version'; V=(FV (& $GP $wd 'OsVersion'))})
+        if ($isLocal) {
+            $v = & $GP $wd 'OsArch';    if ($v) { $osRows.Add([PSCustomObject]@{K='Architecture'; V=(FV $v)}) }
+            $v = & $GP $wd 'OsInstall'; if ($v) { $osRows.Add([PSCustomObject]@{K='Install Date'; V=(FV $v)}) }
+        }
+        $subHtml += Build-WinSubHtml $snId 'os' 'Operating System' (New-KVTable $osRows)
+
+        # Hardware & Storage
+        $hwRows = [System.Collections.Generic.List[object]]::new()
+        $hwRows.Add([PSCustomObject]@{K='RAM'; V=(FV (& $GP $wd 'Ram'))})
+        $hwRows.Add([PSCustomObject]@{K='CPU'; V=(FV (& $GP $wd 'CpuName'))})
+        $v = & $GP $wd 'CpuCores'; if ($v) { $hwRows.Add([PSCustomObject]@{K='Cores'; V=(FV $v)}) }
+        if ($isLocal) { $v = & $GP $wd 'CpuThreads'; if ($v) { $hwRows.Add([PSCustomObject]@{K='Threads'; V=(FV $v)}) } }
+        $drv = & $GP $wd 'Drives'
+        if ($drv) { foreach ($d2 in $drv) { $hwRows.Add([PSCustomObject]@{K="Drive $($d2.Name):"; V="$($d2.Total) GB total  |  $($d2.Used) GB used  |  $($d2.Free) GB free"}) } }
+        $subHtml += Build-WinSubHtml $snId 'hw' 'Hardware and Storage' (New-KVTable $hwRows)
+
+        # Network
+        $netBody = ''
+        $nics = & $GP $wd 'Nics'
+        if ($nics) {
+            $nicIdx = 0
+            foreach ($nic in $nics) {
+                $nicIdx++
+                $nicRows = [System.Collections.Generic.List[object]]::new()
+                $nv = & $GP $nic 'IP';      if ($nv) { $nicRows.Add([PSCustomObject]@{K='IP Address'; V=(FV $nv)}) }
+                $nv = & $GP $nic 'Subnet';  if ($nv) { $nicRows.Add([PSCustomObject]@{K='Subnet';     V=(FV $nv)}) }
+                $nv = & $GP $nic 'Gateway'; if ($nv) { $nicRows.Add([PSCustomObject]@{K='Gateway';    V=(FV $nv)}) }
+                $nv = & $GP $nic 'DNS';     if ($nv) { $nicRows.Add([PSCustomObject]@{K='DNS';        V=(FV $nv)}) }
+                $nv = & $GP $nic 'DHCP';    if ($nv) { $nicRows.Add([PSCustomObject]@{K='DHCP';       V=(FV $nv)}) }
+                $nv = & $GP $nic 'Mac';     if ($nv) { $nicRows.Add([PSCustomObject]@{K='MAC';        V=(FV $nv)}) }
+                if ($isLocal) {
+                    $nv = & $GP $nic 'Speed';     if ($nv) { $nicRows.Add([PSCustomObject]@{K='Link Speed'; V=(FV $nv)}) }
+                    $nv = & $GP $nic 'Status';    if ($nv) { $nicRows.Add([PSCustomObject]@{K='Status';     V=(FV $nv)}) }
+                    $nv = & $GP $nic 'NetBIOS';   if ($nv) { $nicRows.Add([PSCustomObject]@{K='NetBIOS';    V=(FV $nv)}) }
+                    $nv = & $GP $nic 'DNSDomain'; if ($nv) { $nicRows.Add([PSCustomObject]@{K='DNS Domain'; V=(FV $nv)}) }
+                }
+                $nicDesc = & $GP $nic 'Desc'; if (-not $nicDesc) { $nicDesc = "NIC $nicIdx" }
+                $netBody += "<div class='sub'>$(HE $nicDesc)</div>" + (New-KVTable $nicRows)
+            }
+        }
+        if (-not $netBody) { $netBody = "<p class='win-na'>No network adapter data.</p>" }
+        $subHtml += Build-WinSubHtml $snId 'net' 'Network' $netBody
+
+        # Domain
+        $domRows   = [System.Collections.Generic.List[object]]::new()
+        $domName   = & $GP $wd 'DomainName'
+        $domJoined = & $GP $wd 'DomainJoined'
+        if ($null -ne $domJoined) { $domRows.Add([PSCustomObject]@{K='Domain Joined'; V=if($domJoined){"Yes ($(FV $domName))"}else{'No'}}) }
+        if ($domName) { $domRows.Add([PSCustomObject]@{K='Domain Name'; V=(FV $domName)}) }
+        $subHtml += Build-WinSubHtml $snId 'domain' 'Domain' (New-KVTable $domRows)
+
+        # Installed PM Software (primary only)
+        if ($isLocal) {
+            $swBody = ''
+            $pmApps = & $GP $wd 'PmApps'
+            if (-not $pmApps -or $pmApps.Count -eq 0) {
+                $swBody = "<p style='color:#aaa;padding:8px'>No print management software detected.</p>"
+            } else {
+                foreach ($app in $pmApps) {
+                    $appRows = [System.Collections.Generic.List[object]]::new()
+                    if ($app.Version)   { $appRows.Add([PSCustomObject]@{K='Version'; V=$app.Version}) }
+                    if ($app.SvcStatus) { $appRows.Add([PSCustomObject]@{K='Service'; V=$app.SvcStatus}) }
+                    if ($app.Path)      { $appRows.Add([PSCustomObject]@{K='Path';    V=$app.Path}) }
+                    $swBody += "<div class='sub'>$(HE $app.Name)</div>" + (New-KVTable $appRows)
+                }
+            }
+            $subHtml += Build-WinSubHtml $snId 'sw' 'Installed Print Management Software' $swBody
+        } else {
+            $subHtml += Build-WinSubHtml $snId 'sw' 'Installed Print Management Software' "<p class='win-na'>Not available via remote scan.</p>"
+        }
+
+        # Windows Roles & Features
+        $roleBody = ''
+        if ($isLocal) {
+            $roleRows = [System.Collections.Generic.List[object]]::new()
+            $v = & $GP $wd 'DotNet35';        if ($v) { $roleRows.Add([PSCustomObject]@{K='.NET 3.5';          V=(FV $v)}) }
+            $v = & $GP $wd 'DotNet48';        if ($v) { $roleRows.Add([PSCustomObject]@{K='.NET 4.8';          V=(FV $v)}) }
+            $v = & $GP $wd 'PrintRoleStatus'; if ($v) { $roleRows.Add([PSCustomObject]@{K='Print Server Role';  V=(FV $v)}) }
+            $v = & $GP $wd 'SpoolerStatus';   if ($v) { $roleRows.Add([PSCustomObject]@{K='Spooler Service';    V=(FV $v)}) }
+            $v = & $GP $wd 'SpoolFolder';     if ($v) { $roleRows.Add([PSCustomObject]@{K='Spool Folder';       V=(FV $v)}) }
+            $roleBody = (New-KVTable $roleRows)
+            $iRoles = & $GP $wd 'InstalledRoles'
+            if ($iRoles -and $iRoles.Count -gt 0) {
+                $rr=[System.Collections.Generic.List[object]]::new()
+                $iRoles | Sort-Object | ForEach-Object { $rr.Add([PSCustomObject]@{K='Role';V=$_}) }
+                $roleBody += "<div class='sub'>Installed Roles</div>" + (New-KVTable $rr)
+            }
+            $iFeat = & $GP $wd 'InstalledFeatures'
+            if ($iFeat -and $iFeat.Count -gt 0) {
+                $fr=[System.Collections.Generic.List[object]]::new()
+                $iFeat | Sort-Object | ForEach-Object { $fr.Add([PSCustomObject]@{K='Feature';V=$_}) }
+                $roleBody += "<div class='sub'>Installed Features</div>" + (New-KVTable $fr)
+            }
+        } else {
+            $iRoles = & $GP $wd 'InstalledRoles'
+            if ($iRoles -and $iRoles.Count -gt 0) {
+                $rr=[System.Collections.Generic.List[object]]::new()
+                $iRoles | Sort-Object | ForEach-Object { $rr.Add([PSCustomObject]@{K='Role';V=$_}) }
+                $roleBody = "<div class='sub'>Installed Roles</div>" + (New-KVTable $rr)
+            } else {
+                $roleBody = "<p class='win-na'>No role data from remote scan.</p>"
+            }
+        }
+        $subHtml += Build-WinSubHtml $snId 'roles' 'Windows Roles and Features' $roleBody
+
+        # SQL Server
+        $sqlBody = ''
+        if ($isLocal) {
+            $sqlInsts = & $GP $wd 'SqlInstances'
+            if (-not $sqlInsts -or $sqlInsts.Count -eq 0) {
+                $sqlBody = "<p style='color:#aaa;padding:8px'>No SQL Server instances detected.</p>"
+            } else {
+                foreach ($si in $sqlInsts) {
+                    $sr=[System.Collections.Generic.List[object]]::new()
+                    @(
+                        @{K='Edition';          V=$si.Edition},
+                        @{K='Version';          V=$si.Version},
+                        @{K='Service';          V=$si.Status},
+                        @{K='Service Account';  V=$si.ServiceAcct},
+                        @{K='Auth Mode';        V=$si.AuthMode},
+                        @{K='Install Path';     V=$si.InstallPath},
+                        @{K='Data Root';        V=$si.DataRoot},
+                        @{K='Default Data Dir'; V=$si.DefaultData},
+                        @{K='Default Log Dir';  V=$si.DefaultLog},
+                        @{K='Backup Dir';       V=$si.BackupDir},
+                        @{K='Error Log';        V=$si.ErrorLog},
+                        @{K='Named Pipes';      V=if($si.NpEnabled){'Enabled'}else{'Disabled'}},
+                        @{K='TCP/IP';           V=if($si.TcpEnabled){'Enabled'}else{'Disabled'}},
+                        @{K='TCP Port (IPAll)'; V=$si.TcpPort},
+                        @{K='TCP Keep Alive';   V=$si.TcpKeepAlive},
+                        @{K='TCP Listen All';   V=$si.TcpListenAll},
+                        @{K='FILESTREAM';       V=$si.FsDesc},
+                        @{K='Max Server Memory';V=$si.MaxMemoryMB},
+                        @{K='Min Server Memory';V=$si.MinMemoryMB},
+                        @{K='User Instances';   V=$si.UserInstances}
+                    ) | ForEach-Object { $sr.Add([PSCustomObject]@{K=$_.K;V=(FV $_.V)}) }
+                    $sqlBody += "<div class='inst-hdr'>&#9670; Instance: $(HE $si.Name)</div>" + (New-KVTable $sr)
+                    if ($si.TcpIpAddrs -and $si.TcpIpAddrs.Count -gt 0) {
+                        $ipr=[System.Collections.Generic.List[object]]::new()
+                        foreach ($ip in $si.TcpIpAddrs) {
+                            $ipr.Add([PSCustomObject]@{K="$($ip.Name) ($($ip.IP))"; V="Active=$($ip.Active)  Enabled=$($ip.Enabled)  Port=$(if($ip.Port){$ip.Port}else{'(none)'})"})
+                        }
+                        $sqlBody += "<div class='sub' style='margin-top:6px'>TCP/IP Addresses</div>" + (New-KVTable $ipr)
+                    }
+                    if ($si.SysAdmins -and $si.SysAdmins.Count -gt 0) {
+                        $ar=[System.Collections.Generic.List[object]]::new()
+                        foreach ($a in $si.SysAdmins) {
+                            $p=$a -split '\|',2
+                            $ar.Add([PSCustomObject]@{K=$p[0];V=if($p.Count -gt 1){$p[1]}else{''}})
+                        }
+                        $sqlBody += "<div class='sub' style='margin-top:6px'>Sysadmin Members</div>" + (New-KVTable $ar)
+                    }
+                    if ($si.TempDbFiles -and $si.TempDbFiles.Count -gt 0) {
+                        $tr=[System.Collections.Generic.List[object]]::new()
+                        foreach ($tf in $si.TempDbFiles) {
+                            $tr.Add([PSCustomObject]@{K="[$($tf.Type)] $($tf.Name)"; V="$($tf.Path)  |  Size: $($tf.SizeMB) MB  |  Growth: $($tf.Growth)"})
+                        }
+                        $sqlBody += "<div class='sub' style='margin-top:6px'>TempDB Files</div>" + (New-KVTable $tr)
+                    }
+                }
+            }
+        } else {
+            $sqlSvcs = & $GP $wd 'SqlServices'
+            if ($sqlSvcs -and $sqlSvcs.Count -gt 0) {
+                $sr=[System.Collections.Generic.List[object]]::new()
+                $sqlSvcs | ForEach-Object { $sr.Add([PSCustomObject]@{K='SQL Service'; V=(FV $_)}) }
+                $sqlBody = New-KVTable $sr
+            } else {
+                $sqlBody = "<p style='color:#aaa;padding:8px'>No SQL services detected on this server.</p>"
+            }
+        }
+        $subHtml += Build-WinSubHtml $snId 'sql' 'SQL Server' $sqlBody
+
+        # Print Queues
+        $qBody = ''
+        $pqs   = & $GP $wd 'PrintQueues'; if (-not $pqs) { $pqs = @() }
+        if ($pqs.Count -eq 0) {
+            $qBody = "<p style='color:#aaa;padding:8px'>No print queues.</p>"
+        } elseif ($isLocal) {
+            $ffCnt = & $GP $wd 'FfCount'; $sfdr = & $GP $wd 'SpoolFolder'
+            $qBody = "<p style='padding:4px 0 8px;color:#555;font-size:12px'>$($pqs.Count) queues total"
+            if ($ffCnt) { $qBody += " &nbsp;|&nbsp; FujiFilm/FF: $ffCnt" }
+            if ($sfdr)  { $qBody += " &nbsp;|&nbsp; Spool: $(HE $sfdr)" }
+            $qBody += "</p>"
+            foreach ($q in $pqs) {
+                $qr=[System.Collections.Generic.List[object]]::new()
+                @(
+                    @{K='Driver';               V=$q.Driver},
+                    @{K='Port';                 V=$q.Port},
+                    @{K='Status';               V=$q.Status},
+                    @{K='Paper Size';           V=$q.PaperSize},
+                    @{K='Duplex';               V=$q.Duplex},
+                    @{K='Color';                V=$q.Color},
+                    @{K='Adv Print Features';   V=$q.AdvFeatures},
+                    @{K='Render on Client';     V=$q.RenderOnClient},
+                    @{K='Use App Color';        V=$q.ColorMgmt},
+                    @{K='ICM Method';           V=$q.IcmMethod},
+                    @{K='Shared';               V=if($q.Shared){"Yes (Share: $($q.ShareName))"}else{'No'}},
+                    @{K='Published in AD';      V=if($q.Published){'Yes'}else{'No'}},
+                    @{K='x86 (32-bit) Driver';  V=if($q.Has32bit){'Installed'}else{'Not installed'}},
+                    @{K='Finisher Installed';   V=$q.FinisherInst},
+                    @{K='Staple Capable';       V=$q.StapleInst},
+                    @{K='Punch Capable';        V=$q.PunchInst},
+                    @{K='Booklet Maker';        V=$q.BookletInst},
+                    @{K='Offset Stacking (hw)'; V=$q.OffsetInst}
+                ) | Where-Object { $_.V -ne '' } | ForEach-Object { $qr.Add([PSCustomObject]@{K=$_.K;V=(FV $_.V 200)}) }
+                $qBody += "<div class='sub'>$(HE $q.Name)</div>" + (New-KVTable $qr)
+            }
+        } else {
+            # Remote: simplified - Name, Driver, Port
+            $qr2=[System.Collections.Generic.List[object]]::new()
+            foreach ($q in $pqs) {
+                $drvName  = if ($q -is [hashtable]) { $q.Driver } elseif ($q.PSObject.Properties['DriverName']) { $q.DriverName } elseif ($q.PSObject.Properties['Driver']) { $q.Driver } else { '' }
+                $portName = if ($q -is [hashtable]) { $q.Port   } elseif ($q.PSObject.Properties['Port'])       { $q.Port       } else { '' }
+                $qr2.Add([PSCustomObject]@{K=$q.Name; V="Driver: $(FV $drvName)  |  Port: $(FV $portName)"})
+            }
+            $qBody = New-KVTable $qr2
+        }
+        $subHtml += Build-WinSubHtml $snId 'queues' "Print Queues ($($pqs.Count))" $qBody
+
+        # Drivers & Ports (primary only)
+        $drvBody = ''
+        if ($isLocal) {
+            $drv64  = & $GP $wd 'DriversX64'
+            $drv86  = & $GP $wd 'DriversX86'
+            $pports = & $GP $wd 'PrinterPorts'
+            if ($drv64 -and $drv64.Count -gt 0) {
+                $dr64=[System.Collections.Generic.List[object]]::new()
+                $drv64 | Sort-Object Name | ForEach-Object { $dr64.Add([PSCustomObject]@{K='x64';V=$_.Name}) }
+                $drvBody += "<div class='sub'>x64 (64-bit) Drivers</div>" + (New-KVTable $dr64)
+            }
+            if ($drv86 -and $drv86.Count -gt 0) {
+                $dr86=[System.Collections.Generic.List[object]]::new()
+                $drv86 | Sort-Object Name | ForEach-Object { $dr86.Add([PSCustomObject]@{K='x86';V=$_.Name}) }
+                $drvBody += "<div class='sub'>x86 (32-bit) Drivers</div>" + (New-KVTable $dr86)
+            }
+            if ($pports -and $pports.Count -gt 0) {
+                $prRows=[System.Collections.Generic.List[object]]::new()
+                foreach ($pt in $pports) {
+                    $pv = $pt.Name
+                    if ($pt.IP)   { $pv += "  IP=$($pt.IP)" }
+                    if ($pt.Port) { $pv += "  Port=$($pt.Port)" }
+                    $prRows.Add([PSCustomObject]@{K='Port';V=$pv})
+                }
+                $drvBody += "<div class='sub'>Printer Ports ($($pports.Count))</div>" + (New-KVTable $prRows)
+            }
+            if (-not $drvBody) { $drvBody = "<p class='win-na'>No driver or port data.</p>" }
+        } else {
+            $drvBody = "<p class='win-na'>Not available via remote scan.</p>"
+        }
+        $subHtml += Build-WinSubHtml $snId 'drivers' 'Printer Drivers and Ports' $drvBody
+
+    } # end $wd block
+
+    # Assemble server card
+    $cardId = "wsrv-$snId"
+    $html   = "<div class='win-srv-card' id='$cardId'>"
+    $html  += "<div class='win-srv-hdr' onclick=`"tog('$cardId')`">"
+    $html  += "<span style='font-size:15px;margin-right:4px'>&#128187;</span>"
+    $html  += "<span class='win-srv-name'>$(HE $ServerName)</span>"
+    $html  += $badge
+    $html  += $srcLabel
+    $html  += "<span class='tok' id='t-$cardId'>-</span>"
+    $html  += "</div>"
+    $html  += "<div class='sec-body' id='b-$cardId'>"
+    if ($importInfo) { $html += $importInfo }
+    $html  += "<div style='padding:6px 0'>"
+    $html  += $subHtml
+    $html  += "</div>"
+    $html  += "</div>"
+    $html  += "</div>"
+    return $html
+}
+
+# ============================================================
 # BUILD MULTI-SERVER ENVIRONMENT HTML
 # ============================================================
 function Build-MultiServerHtml {
@@ -2419,20 +2823,25 @@ function Write-HtmlReport {
         default   { '#555'   }
     }
 
+    # Pre-compute all Windows Server names (primary first, then others alphabetically)
+    $pSn = $data.Hostname
+    $allWsServers = [System.Collections.Generic.List[string]]::new()
+    $allWsServers.Add($pSn)
+    foreach ($sn in ($data.ServerNames | Sort-Object)) {
+        if ($sn -and $sn -ine $pSn -and -not $allWsServers.Contains($sn)) {
+            $allWsServers.Add($sn)
+        }
+    }
+
     # --- Sidebar nav ---
     $nav  = "<div class='grp'>Environment</div>"
     $nav += "<a href='#s-multi-server'>Environment &amp; Servers</a>"
-    $nav += "<div class='grp'>Windows Server (Primary)</div>"
-    $nav += "<a href='#s-win-system'>System Identity</a>"
-    $nav += "<a href='#s-win-os'>Operating System</a>"
-    $nav += "<a href='#s-win-hw'>Hardware &amp; Storage</a>"
-    $nav += "<a href='#s-win-net'>Network</a>"
-    $nav += "<a href='#s-win-domain'>Domain</a>"
-    $nav += "<a href='#s-win-sw'>Installed Software</a>"
-    $nav += "<a href='#s-win-roles'>Windows Roles</a>"
-    $nav += "<a href='#s-win-sql'>SQL Server</a>"
-    $nav += "<a href='#s-win-queues'>Print Queues</a>"
-    $nav += "<a href='#s-win-drivers'>Drivers &amp; Ports</a>"
+    $nav += "<div class='grp'>Windows Servers</div>"
+    $nav += "<a href='#s-win-servers'>Overview</a>"
+    foreach ($sn in $allWsServers) {
+        $snId2 = $sn -replace '[^a-zA-Z0-9]','-'
+        $nav  += "<a href='#wsrv-$snId2'>$(HE $sn)</a>"
+    }
     $nav += "<div class='grp'>ControlSuite</div>"
     $nav += "<a href='#s-components'>Installed Components</a>"
     foreach ($sec in $SectionMeta.Keys) {
@@ -2479,220 +2888,19 @@ function Write-HtmlReport {
     $acctCards += "<div class='scard sc-eq scard-warn'><div class='lbl'>Accounts with Secondary PIN</div><div class='val val-warn' title='Secondary PIN uses a default sentinel hash on every row in this EQ version - reliable detection not possible'>Unable to verify &#9432;</div></div>"
     $acctCards += "<div class='scard sc-eq'><div class='lbl'>Accounts with Any PIN <span style=''>(excl. Secondary)</span></div><div class='val'>$($data.PinStats.WithAnyPin)</div></div>"
     $cardsHtml = "<div class='srow-lbl'>Environment</div><div class='sgrid'>$envCards</div>" +
-                 "<div class='srow-lbl' style='margin-top:8px'>Windows Server (Primary)</div><div class='sgrid'>$winCards</div>" +
+                 "<div class='srow-lbl' style='margin-top:8px'>Windows Server</div><div class='sgrid'>$winCards</div>" +
                  "<div class='srow-lbl' style='margin-top:8px'>ControlSuite</div><div class='sgrid'>$eqCards</div>" +
                  "<div class='srow-lbl' style='margin-top:8px'>Accounts</div><div class='sgrid'>$acctCards</div>"
 
     # ============================================================
-    # WINDOWS HTML SECTIONS
+    # WINDOWS HTML SECTIONS - per server (MultiC)
     # ============================================================
-    $winHtml = ''
-    if ($data.WinData) {
-        $wd = $data.WinData
-
-        # System Identity
-        $sysRows = [System.Collections.Generic.List[object]]::new()
-        @(
-            @{K='Computer Name';  V=$wd.ComputerName},
-            @{K='Manufacturer';   V=$wd.Manufacturer},
-            @{K='Model';          V=$wd.Model},
-            @{K='Platform';       V=if($wd.Hypervisor){"$($wd.Platform) ($($wd.Hypervisor))"}else{$wd.Platform}},
-            @{K='System UUID';    V=$wd.UUID},
-            @{K='BIOS Version';   V=$wd.BiosVersion},
-            @{K='BIOS Serial';    V=$wd.BiosSerial}
-        ) | ForEach-Object { $sysRows.Add([PSCustomObject]@{K=$_.K;V=(FV $_.V)}) }
-        $winHtml += New-HtmlSection 'win-system' 'System Identity' (New-KVTable $sysRows)
-
-        # OS
-        $osRows = [System.Collections.Generic.List[object]]::new()
-        @(
-            @{K='OS Name';       V=$wd.OsName},
-            @{K='OS Version';    V=$wd.OsVersion},
-            @{K='Architecture';  V=$wd.OsArch},
-            @{K='Install Date';  V=$wd.OsInstall}
-        ) | ForEach-Object { $osRows.Add([PSCustomObject]@{K=$_.K;V=(FV $_.V)}) }
-        $winHtml += New-HtmlSection 'win-os' 'Operating System' (New-KVTable $osRows)
-
-        # Hardware & Storage
-        $hwRows = [System.Collections.Generic.List[object]]::new()
-        $hwRows.Add([PSCustomObject]@{K='RAM';     V=(FV $wd.Ram)})
-        $hwRows.Add([PSCustomObject]@{K='CPU';     V=(FV $wd.CpuName)})
-        $hwRows.Add([PSCustomObject]@{K='Cores';   V=(FV $wd.CpuCores)})
-        $hwRows.Add([PSCustomObject]@{K='Threads'; V=(FV $wd.CpuThreads)})
-        foreach ($d2 in $wd.Drives) {
-            $hwRows.Add([PSCustomObject]@{K="Drive $($d2.Name):"; V="$($d2.Total) GB total  |  $($d2.Used) GB used  |  $($d2.Free) GB free"})
-        }
-        $winHtml += New-HtmlSection 'win-hw' 'Hardware and Storage' (New-KVTable $hwRows)
-
-        # Network
-        $netBody = ''
-        foreach ($nic in $wd.Nics) {
-            $nicRows = [System.Collections.Generic.List[object]]::new()
-            @(
-                @{K='IP Address';  V=$nic.IP},
-                @{K='Subnet';      V=$nic.Subnet},
-                @{K='Gateway';     V=$nic.Gateway},
-                @{K='DNS';         V=$nic.DNS},
-                @{K='DHCP';        V=$nic.DHCP},
-                @{K='MAC Address'; V=$nic.Mac},
-                @{K='Link Speed';  V=$nic.Speed},
-                @{K='Status';      V=$nic.Status},
-                @{K='NetBIOS';     V=$nic.NetBIOS},
-                @{K='DNS Domain';  V=$nic.DNSDomain}
-            ) | Where-Object { $_.V } | ForEach-Object { $nicRows.Add([PSCustomObject]@{K=$_.K;V=(FV $_.V)}) }
-            $netBody += "<div class='sub'>$(HE $nic.Desc)</div>" + (New-KVTable $nicRows)
-        }
-        $winHtml += New-HtmlSection 'win-net' 'Network' $netBody
-
-        # Domain
-        $domRows = [System.Collections.Generic.List[object]]::new()
-        $domRows.Add([PSCustomObject]@{K='Domain Joined'; V=if($wd.DomainJoined){"Yes ($($wd.DomainName))"}else{'No'}})
-        $domRows.Add([PSCustomObject]@{K='Domain Name';   V=(FV $wd.DomainName)})
-        $winHtml += New-HtmlSection 'win-domain' 'Domain' (New-KVTable $domRows)
-
-        # Installed PM Software
-        $swBody = ''
-        if ($wd.PmApps.Count -eq 0) {
-            $swBody = "<p style='color:#aaa;padding:8px'>No print management software detected.</p>"
-        } else {
-            foreach ($app in $wd.PmApps) {
-                $appRows = [System.Collections.Generic.List[object]]::new()
-                if ($app.Version)   { $appRows.Add([PSCustomObject]@{K='Version';  V=$app.Version}) }
-                if ($app.SvcStatus) { $appRows.Add([PSCustomObject]@{K='Service';  V=$app.SvcStatus}) }
-                if ($app.Path)      { $appRows.Add([PSCustomObject]@{K='Path';     V=$app.Path}) }
-                $swBody += "<div class='sub'>$(HE $app.Name)</div>" + (New-KVTable $appRows)
-            }
-        }
-        $winHtml += New-HtmlSection 'win-sw' 'Installed Print Management Software' $swBody
-
-        # Windows Roles & Features
-        $roleRows = [System.Collections.Generic.List[object]]::new()
-        $roleRows.Add([PSCustomObject]@{K='.NET 3.5';        V=(FV $wd.DotNet35)})
-        $roleRows.Add([PSCustomObject]@{K='.NET 4.8';        V=(FV $wd.DotNet48)})
-        $roleRows.Add([PSCustomObject]@{K='Print Server Role';V=(FV $wd.PrintRoleStatus)})
-        $roleRows.Add([PSCustomObject]@{K='Spooler Service'; V=(FV $wd.SpoolerStatus)})
-        $roleRows.Add([PSCustomObject]@{K='Spool Folder';    V=(FV $wd.SpoolFolder)})
-        $roleBody = (New-KVTable $roleRows)
-        if ($wd.InstalledRoles.Count -gt 0) {
-            $rr=[System.Collections.Generic.List[object]]::new()
-            $wd.InstalledRoles | Sort-Object | ForEach-Object { $rr.Add([PSCustomObject]@{K='Role';V=$_}) }
-            $roleBody += "<div class='sub'>Installed Roles</div>" + (New-KVTable $rr)
-        }
-        if ($wd.InstalledFeatures.Count -gt 0) {
-            $fr=[System.Collections.Generic.List[object]]::new()
-            $wd.InstalledFeatures | Sort-Object | ForEach-Object { $fr.Add([PSCustomObject]@{K='Feature';V=$_}) }
-            $roleBody += "<div class='sub'>Installed Features</div>" + (New-KVTable $fr)
-        }
-        $winHtml += New-HtmlSection 'win-roles' 'Windows Roles and Features' $roleBody
-
-        # SQL Server
-        $sqlBody = ''
-        if ($wd.SqlInstances.Count -eq 0) {
-            $sqlBody = "<p style='color:#aaa;padding:8px'>No SQL Server instances detected.</p>"
-        } else {
-            foreach ($si in $wd.SqlInstances) {
-                $sr=[System.Collections.Generic.List[object]]::new()
-                @(
-                    @{K='Edition';           V=$si.Edition},
-                    @{K='Version';           V=$si.Version},
-                    @{K='Service';           V=$si.Status},
-                    @{K='Service Account';   V=$si.ServiceAcct},
-                    @{K='Auth Mode';         V=$si.AuthMode},
-                    @{K='Install Path';      V=$si.InstallPath},
-                    @{K='Data Root';         V=$si.DataRoot},
-                    @{K='Default Data Dir';  V=$si.DefaultData},
-                    @{K='Default Log Dir';   V=$si.DefaultLog},
-                    @{K='Backup Dir';        V=$si.BackupDir},
-                    @{K='Error Log';         V=$si.ErrorLog},
-                    @{K='Named Pipes';       V=if($si.NpEnabled){'Enabled'}else{'Disabled'}},
-                    @{K='TCP/IP';            V=if($si.TcpEnabled){'Enabled'}else{'Disabled'}},
-                    @{K='TCP Port (IPAll)';  V=$si.TcpPort},
-                    @{K='TCP Keep Alive';    V=$si.TcpKeepAlive},
-                    @{K='TCP Listen All';    V=$si.TcpListenAll},
-                    @{K='FILESTREAM';        V=$si.FsDesc},
-                    @{K='Max Server Memory'; V=$si.MaxMemoryMB},
-                    @{K='Min Server Memory'; V=$si.MinMemoryMB},
-                    @{K='User Instances';    V=$si.UserInstances}
-                ) | ForEach-Object { $sr.Add([PSCustomObject]@{K=$_.K;V=(FV $_.V)}) }
-                $sqlBody += "<div class='inst-hdr'>&#9670; Instance: $(HE $si.Name)</div>" + (New-KVTable $sr)
-                if ($si.TcpIpAddrs.Count -gt 0) {
-                    $ipr=[System.Collections.Generic.List[object]]::new()
-                    foreach ($ip in $si.TcpIpAddrs) {
-                        $ipr.Add([PSCustomObject]@{K="$($ip.Name) ($($ip.IP))"; V="Active=$($ip.Active)  Enabled=$($ip.Enabled)  Port=$(if($ip.Port){$ip.Port}else{'(none)'})"})
-                    }
-                    $sqlBody += "<div class='sub' style='margin-top:6px'>TCP/IP Addresses</div>" + (New-KVTable $ipr)
-                }
-                if ($si.SysAdmins.Count -gt 0) {
-                    $ar=[System.Collections.Generic.List[object]]::new()
-                    foreach ($a in $si.SysAdmins) {
-                        $p=$a -split '\|',2
-                        $ar.Add([PSCustomObject]@{K=$p[0];V=if($p.Count -gt 1){$p[1]}else{''}})
-                    }
-                    $sqlBody += "<div class='sub' style='margin-top:6px'>Sysadmin Members</div>" + (New-KVTable $ar)
-                }
-                if ($si.TempDbFiles.Count -gt 0) {
-                    $tr=[System.Collections.Generic.List[object]]::new()
-                    foreach ($tf in $si.TempDbFiles) {
-                        $tr.Add([PSCustomObject]@{K="[$($tf.Type)] $($tf.Name)"; V="$($tf.Path)  |  Size: $($tf.SizeMB) MB  |  Growth: $($tf.Growth)"})
-                    }
-                    $sqlBody += "<div class='sub' style='margin-top:6px'>TempDB Files</div>" + (New-KVTable $tr)
-                }
-            }
-        }
-        $winHtml += New-HtmlSection 'win-sql' 'SQL Server' $sqlBody
-
-        # Print Queues
-        $qBody = "<p style='padding:4px 0 8px;color:#555;font-size:12px'>$($wd.PrintQueues.Count) queues total &nbsp;|&nbsp; FujiFilm/FF: $($wd.FfCount) &nbsp;|&nbsp; Spool: $(HE $wd.SpoolFolder)</p>"
-        foreach ($q in $wd.PrintQueues) {
-            $qr=[System.Collections.Generic.List[object]]::new()
-            @(
-                @{K='Driver';           V=$q.Driver},
-                @{K='Port';             V=$q.Port},
-                @{K='Status';           V=$q.Status},
-                @{K='Paper Size';       V=$q.PaperSize},
-                @{K='Duplex';           V=$q.Duplex},
-                @{K='Color';            V=$q.Color},
-                @{K='Adv Print Features';V=$q.AdvFeatures},
-                @{K='Render on Client'; V=$q.RenderOnClient},
-                @{K='Use App Color';    V=$q.ColorMgmt},
-                @{K='ICM Method';       V=$q.IcmMethod},
-                @{K='Shared';           V=if($q.Shared){"Yes (Share: $($q.ShareName))"}else{'No'}},
-                @{K='Published in AD';  V=if($q.Published){'Yes'}else{'No'}},
-                @{K='x86 (32-bit) Driver';V=if($q.Has32bit){'Installed'}else{'Not installed'}},
-                @{K='Finisher Installed';V=$q.FinisherInst},
-                @{K='Staple Capable';   V=$q.StapleInst},
-                @{K='Punch Capable';    V=$q.PunchInst},
-                @{K='Booklet Maker';    V=$q.BookletInst},
-                @{K='Offset Stacking (hw)'; V=$q.OffsetInst}
-            ) | Where-Object { $_.V -ne '' } | ForEach-Object { $qr.Add([PSCustomObject]@{K=$_.K;V=(FV $_.V 200)}) }
-            $qBody += "<div class='sub'>$(HE $q.Name)</div>" + (New-KVTable $qr)
-        }
-        $winHtml += New-HtmlSection 'win-queues' "Print Queues ($($wd.PrintQueues.Count))" $qBody
-
-        # Drivers & Ports
-        $drvBody = ''
-        if ($wd.DriversX64.Count -gt 0) {
-            $dr64=[System.Collections.Generic.List[object]]::new()
-            $wd.DriversX64 | Sort-Object Name | ForEach-Object { $dr64.Add([PSCustomObject]@{K='x64';V=$_.Name}) }
-            $drvBody += "<div class='sub'>x64 (64-bit) Drivers</div>" + (New-KVTable $dr64)
-        }
-        if ($wd.DriversX86.Count -gt 0) {
-            $dr86=[System.Collections.Generic.List[object]]::new()
-            $wd.DriversX86 | Sort-Object Name | ForEach-Object { $dr86.Add([PSCustomObject]@{K='x86';V=$_.Name}) }
-            $drvBody += "<div class='sub'>x86 (32-bit) Drivers</div>" + (New-KVTable $dr86)
-        }
-        if ($wd.PrinterPorts.Count -gt 0) {
-            $prRows=[System.Collections.Generic.List[object]]::new()
-            foreach ($pt in $wd.PrinterPorts) {
-                $pv = $pt.Name
-                if ($pt.IP)   { $pv += "  IP=$($pt.IP)" }
-                if ($pt.Port) { $pv += "  Port=$($pt.Port)" }
-                $prRows.Add([PSCustomObject]@{K='Port';V=$pv})
-            }
-            $drvBody += "<div class='sub'>Printer Ports ($($wd.PrinterPorts.Count))</div>" + (New-KVTable $prRows)
-        }
-        $winHtml += New-HtmlSection 'win-drivers' 'Printer Drivers and Ports' $drvBody
+    $wsCards = ''
+    foreach ($sn in $allWsServers) {
+        $sc = if ($data.RemoteScans -and $data.RemoteScans.ContainsKey($sn)) { $data.RemoteScans[$sn] } else { $null }
+        $wsCards += Build-WinSectionsHtml -data $data -ServerName $sn -scan $sc
     }
+    $winHtml = New-HtmlSection 'win-servers' "Windows Servers ($($allWsServers.Count))" $wsCards
 
     # --- Components section (grouped by SystemName) ---
     $compBody = ''
@@ -2991,6 +3199,18 @@ table.topo-tbl tr:last-child td{border-bottom:none}
 .lc-import-info{font-size:11px;color:#1a5276;background:#eaf4fb;border-left:3px solid #1a5276;padding:5px 10px;border-radius:0 4px 4px 0;margin-bottom:7px}
 .srv-scan-warn{background:#f39c12;color:#fff;border-radius:3px;padding:1px 7px;font-size:10px;font-weight:700;margin-left:6px;white-space:nowrap}
 .firewall-assurance{margin-top:12px;background:#eafaf1;border-left:3px solid #1a7a3c;padding:8px 12px;border-radius:0 4px 4px 0;font-size:12px;color:#145a32;line-height:1.6}
+/* Windows Server per-server cards (MultiC) */
+.win-srv-card{border:1px solid #c8d4ec;border-radius:6px;margin-bottom:10px;overflow:hidden}
+.win-srv-hdr{display:flex;align-items:center;gap:8px;padding:10px 14px;background:#1a2744;color:#fff;cursor:pointer;user-select:none}
+.win-srv-hdr:hover{background:#253060}
+.win-srv-name{font-size:13px;font-weight:700;flex:1;margin-right:4px}
+.win-src-lbl{font-size:10px;color:#c0cfe8;background:rgba(255,255,255,.1);border-radius:3px;padding:2px 8px;white-space:nowrap;margin-right:4px}
+.win-sub-card{border:1px solid #dce6f5;border-radius:4px;margin-bottom:5px;overflow:hidden}
+.win-sub-hdr{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:#eef3fb;cursor:pointer;user-select:none;border-radius:4px 4px 0 0}
+.win-sub-hdr:hover{background:#e2eaf8}
+.win-sub-title{font-size:11px;font-weight:700;color:#1a3a8a;text-transform:uppercase;letter-spacing:.3px}
+.win-noscan{background:#fdf3f2;border-left:3px solid #e74c3c;padding:10px 14px;border-radius:0 4px 4px 0;font-size:12px;color:#c0392b;margin:8px 0;line-height:1.6}
+.win-na{color:#aaa;padding:6px 8px;font-style:italic;font-size:12px;margin:0}
 '@
 
     $js = @'
