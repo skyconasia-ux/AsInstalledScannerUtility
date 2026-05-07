@@ -649,7 +649,8 @@ function Collect-Data {
     Write-Host '  [2/5] SQL table BCP dumps...' -ForegroundColor Cyan
     $bcpTables = @('cas_installedsoftware','cat_pricelist','cas_scan_alias',
                    'cas_workflow_folders','cas_pullgroups','cas_user_ext',
-                   'cas_prq_device_ext','cas_config','cat_validation')
+                   'cas_prq_device_ext','cas_config','cat_validation',
+                   'cas_primarypin_ext')
     $bcp = @{}
     foreach ($t in $bcpTables) {
         Write-Host "        $t" -ForegroundColor DarkCyan
@@ -727,11 +728,51 @@ function Collect-Data {
         if($f[0].Trim()){$pullGroups.Add([PSCustomObject]@{Id=$f[0].Trim();Name=if($f.Count-gt 1){$f[1].Trim()}else{''}})}
     }
 
-    # Users
-    $users = [System.Collections.Generic.List[object]]::new()
-    foreach ($line in $bcp['cas_user_ext']) {
-        $f=$line -split '\|'
-        if($f[0].Trim()){$users.Add([PSCustomObject]@{Id=$f[0].Trim();Domain=if($f.Count-gt 1){$f[1].Trim()}else{''}; Name=if($f.Count-gt 2){$f[2].Trim()}else{''}})}
+    # Build alternate PIN lookup (cas_primarypin_ext: x_id | primarypin)
+    # In Equitrac, cas_primarypin_ext stores the "Alternate primary PIN"
+    $altPinMap = @{}
+    foreach ($line in $bcp['cas_primarypin_ext']) {
+        $f = $line -split '\|'
+        if ($f.Count -ge 2 -and $f[0].Trim()) { $altPinMap[$f[0].Trim()] = $f[1].Trim() }
+    }
+
+    # Parse users, departments, and billing codes from cat_validation
+    # Columns: id|valtype|name|description|pid|balance|hardlimit|creation|lastmodified|
+    #          expiration|state|primarypin|secondarypin|parid|locationid|nonbillable|freemoney
+    # valtype: usr=User, dpt=Department, ct1=Billing Code (ct2-ct8=Custom)
+    $users        = [System.Collections.Generic.List[object]]::new()
+    $departments  = [System.Collections.Generic.List[object]]::new()
+    $billingCodes = [System.Collections.Generic.List[object]]::new()
+    foreach ($line in $bcp['cat_validation']) {
+        $f = $line -split '\|'
+        if ($f.Count -lt 3 -or -not $f[0].Trim()) { continue }
+        $id    = $f[0].Trim()
+        $vt    = if ($f.Count -gt 1)  { $f[1].Trim() }  else { '' }
+        $nm    = if ($f.Count -gt 2)  { $f[2].Trim() }  else { '' }
+        $desc  = if ($f.Count -gt 3)  { $f[3].Trim() }  else { '' }
+        $ppin  = if ($f.Count -gt 11) { $f[11].Trim() } else { '' }
+        $hasSec = ($f.Count -gt 12 -and -not [string]::IsNullOrWhiteSpace($f[12].Trim()))
+        $altPin = if ($altPinMap.ContainsKey($id)) { $altPinMap[$id] } else { '' }
+        switch ($vt) {
+            'usr' {
+                $users.Add([PSCustomObject]@{
+                    Id = $id; Name = $nm; FullName = $desc
+                    PrimaryPin = $ppin; HasSecondaryPin = $hasSec; AlternatePin = $altPin
+                })
+            }
+            'dpt' { $departments.Add([PSCustomObject]@{ Id = $id; Name = $nm; Description = $desc }) }
+            default {
+                if ($vt -match '^ct') {
+                    $billingCodes.Add([PSCustomObject]@{ Id = $id; Type = $vt; Name = $nm; Description = $desc })
+                }
+            }
+        }
+    }
+    $pinStats = @{
+        WithPrimary   = @($users | Where-Object { $_.PrimaryPin }).Count
+        WithAltPin    = @($users | Where-Object { $_.AlternatePin }).Count
+        WithSecondary = @($users | Where-Object { $_.HasSecondaryPin }).Count
+        WithAnyPin    = @($users | Where-Object { $_.PrimaryPin -or $_.AlternatePin -or $_.HasSecondaryPin }).Count
     }
 
     Write-Host '  [5/5] Building key-value map...' -ForegroundColor Cyan
@@ -979,8 +1020,11 @@ function Collect-Data {
         PriceLists  = $priceLists
         Workflows   = $workflows
         WFolders    = $wfFolders
-        PullGroups  = $pullGroups
-        Users       = $users
+        PullGroups   = $pullGroups
+        Users        = $users
+        Departments  = $departments
+        BillingCodes = $billingCodes
+        PinStats     = $pinStats
         SmtpServer  = $smtpSrv
         SmtpPort    = $smtpPort
         Currency    = (EV 'cas||currencyiso4217')
@@ -1205,11 +1249,26 @@ function Write-FullTxt {
         foreach ($pg in $data.PullGroups) { W "  [$($pg.Id)] $($pg.Name)" }
     }
 
-    WH "USER ACCOUNTS (cas_user_ext)"
+    WH "USER ACCOUNTS (cat_validation)"
+    W "  PIN Stats: Primary=$($data.PinStats.WithPrimary)  Alternate=$($data.PinStats.WithAltPin)  Secondary=$($data.PinStats.WithSecondary)  AnyPIN=$($data.PinStats.WithAnyPin)"
     $shown = 0
     foreach ($u in $data.Users) {
-        W "  [$($u.Id)] $($u.Domain)\$($u.Name)"
+        $pinInfo = ''
+        if ($u.PrimaryPin)      { $pinInfo += " PrimaryPIN:$($u.PrimaryPin)" }
+        if ($u.AlternatePin)    { $pinInfo += " AltPIN:$($u.AlternatePin)" }
+        if ($u.HasSecondaryPin) { $pinInfo += " SecPIN:[configured]" }
+        W "  [$($u.Id)] $($u.Name)  ($($u.FullName))$pinInfo"
         if ((++$shown) -ge 50) { W "  ... ($($data.Users.Count - 50) more - see raw BCP)"; break }
+    }
+
+    WH "DEPARTMENTS (cat_validation)"
+    if ($data.Departments.Count -eq 0) { W '  (none)' } else {
+        foreach ($d in $data.Departments) { W "  [$($d.Id)] $($d.Name)  ($($d.Description))" }
+    }
+
+    WH "BILLING CODES (cat_validation)"
+    if ($data.BillingCodes.Count -eq 0) { W '  (none)' } else {
+        foreach ($bc in $data.BillingCodes) { W "  [$($bc.Id)] [$($bc.Type)] $($bc.Name)  ($($bc.Description))" }
     }
 
     WH "FULL EQVAR DUMP (DCE_config.db3)"
@@ -1996,12 +2055,19 @@ function Write-HtmlReport {
     $eqCards += "<div class='scard sc-eq'><div class='lbl'>Price Lists</div><div class='val'>$($data.PriceLists.Count)</div></div>"
     $eqCards += "<div class='scard sc-eq'><div class='lbl'>Workflows</div><div class='val'>$($data.Workflows.Count)</div></div>"
     $eqCards += "<div class='scard sc-eq'><div class='lbl'>Pull Groups</div><div class='val'>$($data.PullGroups.Count)</div></div>"
-    $eqCards += "<div class='scard sc-eq'><div class='lbl'>Users</div><div class='val'>$($data.Users.Count)</div></div>"
     $eqCards += "<div class='scard sc-eq'><div class='lbl'>SMTP</div><div class='val'>$(HE $smtp)</div></div>"
     $eqCards += "<div class='scard sc-eq'><div class='lbl'>Currency</div><div class='val'>$(HE $data.Currency)</div></div>"
     $eqCards += "<div class='scard sc-eq'><div class='lbl'>License Host</div><div class='val'>$(HE $data.LicenseHost)</div></div>"
+    $acctCards  = "<div class='scard sc-eq'><div class='lbl'>Total Accounts</div><div class='val'>$($data.Users.Count)</div></div>"
+    $acctCards += "<div class='scard sc-eq'><div class='lbl'>Total Billing Codes</div><div class='val'>$($data.BillingCodes.Count)</div></div>"
+    $acctCards += "<div class='scard sc-eq'><div class='lbl'>Total Departments</div><div class='val'>$($data.Departments.Count)</div></div>"
+    $acctCards += "<div class='scard sc-eq'><div class='lbl'>Accounts with Primary PIN</div><div class='val'>$($data.PinStats.WithPrimary)</div></div>"
+    $acctCards += "<div class='scard sc-eq'><div class='lbl'>Accounts with Alternate PIN</div><div class='val'>$($data.PinStats.WithAltPin)</div></div>"
+    $acctCards += "<div class='scard sc-eq'><div class='lbl'>Accounts with Secondary PIN</div><div class='val'>$($data.PinStats.WithSecondary)</div></div>"
+    $acctCards += "<div class='scard sc-eq'><div class='lbl'>Accounts with Any PIN</div><div class='val'>$($data.PinStats.WithAnyPin)</div></div>"
     $cardsHtml = "<div class='srow-lbl'>Windows Server</div><div class='sgrid'>$winCards</div>" +
-                 "<div class='srow-lbl' style='margin-top:8px'>ControlSuite</div><div class='sgrid'>$eqCards</div>"
+                 "<div class='srow-lbl' style='margin-top:8px'>ControlSuite</div><div class='sgrid'>$eqCards</div>" +
+                 "<div class='srow-lbl' style='margin-top:8px'>Accounts</div><div class='sgrid'>$acctCards</div>"
 
     # ============================================================
     # WINDOWS HTML SECTIONS
@@ -2281,17 +2347,23 @@ function Write-HtmlReport {
     }
     $pgSection = New-HtmlSection 'pullgroups' 'Pull Print Groups' (New-KVTable $pgRows)
 
-    # --- Users ---
-    $userRows = [System.Collections.Generic.List[object]]::new()
+    # --- Users (10 sample) ---
     $shown = 0
+    $userTbl = "<table class='kv'>"
     foreach ($u in $data.Users) {
-        $userRows.Add([PSCustomObject]@{ K="[$($u.Id)]"; V="$(HE $u.Domain)\$(HE $u.Name)" })
-        if ((++$shown) -ge 50) { break }
+        if ($shown -ge 10) { break }
+        $pinBits = ''
+        if ($u.PrimaryPin)      { $pinBits += "<span class='eq-on'>&#9679; Primary</span> " }
+        if ($u.AlternatePin)    { $pinBits += "<span class='eq-on'>&#9679; Alternate</span> " }
+        if ($u.HasSecondaryPin) { $pinBits += "<span class='eq-on'>&#9679; Secondary</span>" }
+        if (-not $pinBits)      { $pinBits  = "<span class='ds-empty'>None</span>" }
+        $userTbl += "<tr><td class='k'>[$(HE $u.Id)] $(HE $u.Name)</td>"
+        $userTbl += "<td class='v'>$(HE $u.FullName)<span style='font-size:10px;color:#666;margin-left:10px'>$pinBits</span></td></tr>"
+        $shown++
     }
-    $userExtra = if ($data.Users.Count -gt 50) {
-        "<p style='color:#aaa;padding:6px 8px;font-size:11px'>... $($data.Users.Count - 50) more users in FULL.txt</p>"
-    } else { '' }
-    $userSection = New-HtmlSection 'users' "Users ($($data.Users.Count))" ((New-KVTable $userRows) + $userExtra)
+    $userTbl += "</table>"
+    $userNote = "<p style='color:#6b5500;padding:6px 10px;font-size:11px;background:#fffbec;border-left:3px solid #f0b400;margin-bottom:8px;border-radius:0 4px 4px 0'>&#9432; Showing $shown of $($data.Users.Count) accounts. Full list with PIN info in FULL.txt</p>"
+    $userSection = New-HtmlSection 'users' "Users ($($data.Users.Count))" ($userNote + $userTbl)
 
     # --- Full EQVar ---
     $eqBody = ''
@@ -2550,7 +2622,8 @@ function Invoke-Compare {
     # BCP content diff
     CH "SQL TABLE CONTENT CHANGES"
     $diffTables = @('cas_config','cas_scan_alias','cat_pricelist','cas_pullgroups',
-                    'cas_workflow_folders','cas_user_ext','cat_validation','cas_prq_device_ext')
+                    'cas_workflow_folders','cas_user_ext','cat_validation','cas_prq_device_ext',
+                    'cas_primarypin_ext')
     $anyBcp = $false
     foreach ($tbl in $diffTables) {
         $bFile = Join-Path $BeforeDir "bcp_$tbl.txt"
