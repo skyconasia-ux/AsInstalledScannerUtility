@@ -2,7 +2,7 @@
 
 ---
 
-## CURRENT CHECKPOINT — 2026-05-07 (Sessions 14-17)
+## CURRENT CHECKPOINT — 2026-05-07 (Sessions 14-18)
 
 ### Completed
 - **Fixed Print Behavior stale value** - `cas||casdownaction` reads from DRE (authoritative), not DCE cache.
@@ -34,9 +34,11 @@
   - Firewall/Access Requirements HTML section: SQL port, WinRM port, scan mode, account type (no passwords), read-only assurance statement
   - CSS: `srv-collector`, `srv-sqlonly`, `srv-unmatched`, `lc-import-info`, `srv-scan-warn`, `firewall-assurance`
   - Tested: LOCAL COLLECTOR exports JSON; BUILD COMBINED imports and matches; AFTER imports CSTEMP collector JSON, WinRM fails gracefully for DC02-MAIN
-- Commits: `28c761f`, `620b728`, `feac9c9`, `4b46557`, `45aac65`, `825dac6`, `8368e85`, `d55026c`, `d54dc5f`, `479de8c`, `38d64ad`, `8b5dbbe`, `9530ecf`, `7536935`.
+- **Added per-server Windows Servers section (Session 18, MultiC)** - `Build-WinSubHtml` + `Build-WinSectionsHtml` functions; nav group "WINDOWS SERVERS" → Overview + per-server scroll links; one collapsible card per detected server (CSTEMP Primary, DC02-MAIN WinRM OK) each with 10 collapsible subsections; primary server always uses full WinData; remote uses partial WinRM/Collector data; badges: Primary/WinRM OK/Local Collector/SQL-only/Collector Unmatched/fail; TXT organized under WINDOWS SERVERS header; nav links scroll-only (no collapse); new CSS: win-srv-card/hdr/name/src-lbl, win-sub-card/hdr/title, win-noscan, win-na. Tested: both servers show correct cards and data.
+- Commits: `28c761f`, `620b728`, `feac9c9`, `4b46557`, `45aac65`, `825dac6`, `8368e85`, `d55026c`, `d54dc5f`, `479de8c`, `38d64ad`, `8b5dbbe`, `9530ecf`, `7536935`, `68aa9df`.
 
 ### Pending
+- AISAddition-MultiC.txt DONE (Session 18)
 - Add `cas||workflowfolderslastupdatetime` to `$EQVarNoise` (false-positive suppression in Compare mode)
 - Continue UI change mapping: device registration, license seats, user card enrolment, report config
 - Push to `skyconasia-ux/AsInstalledScannerUtility`
