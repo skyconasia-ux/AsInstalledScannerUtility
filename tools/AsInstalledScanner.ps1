@@ -240,7 +240,12 @@ function Get-BcpLines {
     $a = @("$SqlDb..$Table", 'out', $f, '-S', $SqlServer, '-U', $SqlUser, '-P', $SqlPass, '-c', '-t', '|')
     & bcp @a 2>$null | Out-Null
     if (-not (Test-Path $f)) { return @() }
-    return [System.IO.File]::ReadAllLines($f)
+    # Strip embedded null bytes - BCP exports NULL nvarchar fields as a single \0 byte,
+    # which PowerShell Trim() does not remove (it only strips whitespace).
+    # Reading raw bytes and removing \0 produces clean pipe-delimited ASCII lines.
+    $raw = [System.IO.File]::ReadAllText($f, [System.Text.Encoding]::ASCII)
+    $raw = $raw -replace '\x00', ''
+    return $raw -split '\r?\n' | Where-Object { $_ -ne '' }
 }
 
 function Get-EQVarMap {
@@ -740,6 +745,13 @@ function Collect-Data {
     # Columns: id|valtype|name|description|pid|balance|hardlimit|creation|lastmodified|
     #          expiration|state|primarypin|secondarypin|parid|locationid|nonbillable|freemoney
     # valtype: usr=User, dpt=Department, ct1=Billing Code (ct2-ct8=Custom)
+    #
+    # NOTE: cat_validation.secondarypin is UNRELIABLE for presence detection.
+    # Every row - users, departments, billing codes - carries the same 32-char hash
+    # (3CE59CD2B1F5525CFB84E3B1C10F8942) regardless of whether a Secondary PIN was
+    # ever configured. This appears to be a system-default sentinel, not a real hash.
+    # The Equitrac Web UI also never exposes Secondary PIN values on revisit (Modify
+    # button only). Secondary PIN status is therefore marked "unverifiable".
     $users        = [System.Collections.Generic.List[object]]::new()
     $departments  = [System.Collections.Generic.List[object]]::new()
     $billingCodes = [System.Collections.Generic.List[object]]::new()
@@ -751,13 +763,15 @@ function Collect-Data {
         $nm    = if ($f.Count -gt 2)  { $f[2].Trim() }  else { '' }
         $desc  = if ($f.Count -gt 3)  { $f[3].Trim() }  else { '' }
         $ppin  = if ($f.Count -gt 11) { $f[11].Trim() } else { '' }
-        $hasSec = ($f.Count -gt 12 -and -not [string]::IsNullOrWhiteSpace($f[12].Trim()))
+        # Secondary PIN: always 'unverifiable' - the column is present but its value
+        # is a default sentinel hash on every row; cannot distinguish configured vs. empty
+        $secStatus = 'unverifiable'
         $altPin = if ($altPinMap.ContainsKey($id)) { $altPinMap[$id] } else { '' }
         switch ($vt) {
             'usr' {
                 $users.Add([PSCustomObject]@{
                     Id = $id; Name = $nm; FullName = $desc
-                    PrimaryPin = $ppin; HasSecondaryPin = $hasSec; AlternatePin = $altPin
+                    PrimaryPin = $ppin; SecondaryPinStatus = $secStatus; AlternatePin = $altPin
                 })
             }
             'dpt' { $departments.Add([PSCustomObject]@{ Id = $id; Name = $nm; Description = $desc }) }
@@ -771,8 +785,9 @@ function Collect-Data {
     $pinStats = @{
         WithPrimary   = @($users | Where-Object { $_.PrimaryPin }).Count
         WithAltPin    = @($users | Where-Object { $_.AlternatePin }).Count
-        WithSecondary = @($users | Where-Object { $_.HasSecondaryPin }).Count
-        WithAnyPin    = @($users | Where-Object { $_.PrimaryPin -or $_.AlternatePin -or $_.HasSecondaryPin }).Count
+        WithSecondary = 'unverifiable'   # sentinel hash present on ALL rows; cannot detect
+        # AnyPIN excludes Secondary PIN since presence cannot be confirmed
+        WithAnyPin    = @($users | Where-Object { $_.PrimaryPin -or $_.AlternatePin }).Count
     }
 
     Write-Host '  [5/5] Building key-value map...' -ForegroundColor Cyan
@@ -1251,12 +1266,13 @@ function Write-FullTxt {
 
     WH "USER ACCOUNTS (cat_validation)"
     W "  PIN Stats: Primary=$($data.PinStats.WithPrimary)  Alternate=$($data.PinStats.WithAltPin)  Secondary=$($data.PinStats.WithSecondary)  AnyPIN=$($data.PinStats.WithAnyPin)"
+    W "  NOTE: Secondary PIN uses a default sentinel hash on all rows - presence unverifiable from DB alone."
     $shown = 0
     foreach ($u in $data.Users) {
         $pinInfo = ''
-        if ($u.PrimaryPin)      { $pinInfo += " PrimaryPIN:$($u.PrimaryPin)" }
-        if ($u.AlternatePin)    { $pinInfo += " AltPIN:$($u.AlternatePin)" }
-        if ($u.HasSecondaryPin) { $pinInfo += " SecPIN:[configured]" }
+        if ($u.PrimaryPin)    { $pinInfo += " PrimaryPIN:$($u.PrimaryPin)" }
+        if ($u.AlternatePin)  { $pinInfo += " AltPIN:$($u.AlternatePin)" }
+        $pinInfo += " SecPIN:[$($u.SecondaryPinStatus)]"
         W "  [$($u.Id)] $($u.Name)  ($($u.FullName))$pinInfo"
         if ((++$shown) -ge 50) { W "  ... ($($data.Users.Count - 50) more - see raw BCP)"; break }
     }
@@ -2063,8 +2079,8 @@ function Write-HtmlReport {
     $acctCards += "<div class='scard sc-eq'><div class='lbl'>Total Departments</div><div class='val'>$($data.Departments.Count)</div></div>"
     $acctCards += "<div class='scard sc-eq'><div class='lbl'>Accounts with Primary PIN</div><div class='val'>$($data.PinStats.WithPrimary)</div></div>"
     $acctCards += "<div class='scard sc-eq'><div class='lbl'>Accounts with Alternate PIN</div><div class='val'>$($data.PinStats.WithAltPin)</div></div>"
-    $acctCards += "<div class='scard sc-eq'><div class='lbl'>Accounts with Secondary PIN</div><div class='val'>$($data.PinStats.WithSecondary)</div></div>"
-    $acctCards += "<div class='scard sc-eq'><div class='lbl'>Accounts with Any PIN</div><div class='val'>$($data.PinStats.WithAnyPin)</div></div>"
+    $acctCards += "<div class='scard sc-eq scard-warn'><div class='lbl'>Accounts with Secondary PIN</div><div class='val val-warn' title='Secondary PIN uses a default sentinel hash on every row in this EQ version - reliable detection not possible'>Unable to verify &#9432;</div></div>"
+    $acctCards += "<div class='scard sc-eq'><div class='lbl'>Accounts with Any PIN <span style=''>(excl. Secondary)</span></div><div class='val'>$($data.PinStats.WithAnyPin)</div></div>"
     $cardsHtml = "<div class='srow-lbl'>Windows Server</div><div class='sgrid'>$winCards</div>" +
                  "<div class='srow-lbl' style='margin-top:8px'>ControlSuite</div><div class='sgrid'>$eqCards</div>" +
                  "<div class='srow-lbl' style='margin-top:8px'>Accounts</div><div class='sgrid'>$acctCards</div>"
@@ -2353,10 +2369,10 @@ function Write-HtmlReport {
     foreach ($u in $data.Users) {
         if ($shown -ge 10) { break }
         $pinBits = ''
-        if ($u.PrimaryPin)      { $pinBits += "<span class='eq-on'>&#9679; Primary</span> " }
-        if ($u.AlternatePin)    { $pinBits += "<span class='eq-on'>&#9679; Alternate</span> " }
-        if ($u.HasSecondaryPin) { $pinBits += "<span class='eq-on'>&#9679; Secondary</span>" }
-        if (-not $pinBits)      { $pinBits  = "<span class='ds-empty'>None</span>" }
+        if ($u.PrimaryPin)   { $pinBits += "<span class='eq-on'>&#9679; Primary</span> " }
+        if ($u.AlternatePin) { $pinBits += "<span class='eq-on'>&#9679; Alternate</span> " }
+        # Secondary PIN: always unverifiable in this EQ version
+        $pinBits += "<span class='pin-unverif' title='Secondary PIN presence cannot be confirmed from DB'>&#9679; Secondary: Unable to verify</span>"
         $userTbl += "<tr><td class='k'>[$(HE $u.Id)] $(HE $u.Name)</td>"
         $userTbl += "<td class='v'>$(HE $u.FullName)<span style='font-size:10px;color:#666;margin-left:10px'>$pinBits</span></td></tr>"
         $shown++
@@ -2475,6 +2491,9 @@ details.ds-ctr-detail[open] summary{border-bottom:1px solid #d4dcf0}
 .ds-ctr-icon{font-size:13px}
 .ds-ctr-body{padding:8px 12px 12px;background:#fff}
 pre#rawpre{background:#1e1e1e;color:#d4d4d4;padding:14px;border-radius:6px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all}
+.scard-warn{background:rgba(255,180,0,.18)!important;border:1px solid rgba(255,160,0,.3)}
+.val-warn{color:#f0b400!important;font-size:12px!important;cursor:help}
+.pin-unverif{color:#b08000;font-style:italic}
 mark{background:#ffd600;color:#000;border-radius:2px}
 .hi{display:none!important}
 .srow-lbl{font-size:10px;font-weight:bold;color:#6ab;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
