@@ -1,0 +1,10 @@
+{
+    "RemoteScanMode":  "winrm",
+    "WinRmAccountType":  "supplied",
+    "WinRmAccount":  "skyconasia\\administrator",
+    "WinRmPort":  5985,
+    "SqlAuthMode":  "sql-sa",
+    "SqlAccount":  "",
+    "CollectedResultsFolder":  "C:\\Temp\\AsInstalledScanner\\tools\\CollectedResults",
+    "StaleThresholdHours":  24
+}

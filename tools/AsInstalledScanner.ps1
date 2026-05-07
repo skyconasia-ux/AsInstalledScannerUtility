@@ -21,7 +21,10 @@
 
 param(
     [ValidateSet('Before','After','Compare','Full','LocalCollector','BuildCombined','Settings','')]
-    [string]$Mode = ''
+    [string]$Mode = '',
+    # For non-interactive / SSH use only. Converted to SecureString immediately.
+    # Never logged, stored, or printed.
+    [string]$WinRmPassPlain = ''
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -690,7 +693,7 @@ function Collect-RemoteServerData {
 
     Write-Host "    Remote scan: $ServerName ..." -ForegroundColor Cyan
     try {
-        $icCred = if ($Credential) { @{ Credential = $Credential } } else { @{} }
+        $icCred = if ($Credential) { @{ Credential = $Credential; Authentication = 'Negotiate' } } else { @{} }
         $result = Invoke-Command -ComputerName $ServerName -ErrorAction Stop @icCred -ScriptBlock {
             $ErrorActionPreference = 'SilentlyContinue'
             $cs   = Get-WmiObject Win32_ComputerSystem
@@ -759,10 +762,11 @@ function Collect-RemoteServerData {
     } catch {
         $msg = $_.Exception.Message
         $reason = 'Remote scan failed'
-        if     ($msg -match 'WS-Management|WinRM|WSMan')             { $reason = 'WinRM unavailable' }
-        elseif ($msg -match '[Aa]ccess.*[Dd]eni|[Uu]nauth|401')      { $reason = 'Permission denied' }
-        elseif ($msg -match '[Tt]imeout|unreachable|[Nn]etwork')      { $reason = 'Offline or network unreachable' }
-        elseif ($msg -match '[Dd][Nn][Ss]|[Rr]esolv|host')           { $reason = 'DNS resolution failed' }
+        if     ($msg -match 'WS-Management|WinRM|WSMan')                     { $reason = 'WinRM unavailable' }
+        elseif ($msg -match '1312|logon session.*not exist|PSSessionState')   { $reason = 'Double-hop auth - run script locally on server (not via SSH)' }
+        elseif ($msg -match '[Aa]ccess.*[Dd]eni|[Uu]nauth|401')              { $reason = 'Permission denied' }
+        elseif ($msg -match '[Tt]imeout|unreachable|[Nn]etwork')              { $reason = 'Offline or network unreachable' }
+        elseif ($msg -match '[Dd][Nn][Ss]|[Rr]esolv|host')                   { $reason = 'DNS resolution failed' }
         Write-Host "    [!] $ServerName : $reason" -ForegroundColor Yellow
         return @{ IsLocal=$false; Success=$false; ServerName=$ServerName; Error=$reason }
     }
@@ -3527,8 +3531,15 @@ function Run-After {
         # Prepare WinRM credential if needed
         $winCred = $null
         if ($scanMode -eq 'winrm' -and $script:Settings.WinRmAccountType -eq 'supplied' -and $script:Settings.WinRmAccount) {
-            try { $winCred = Get-Credential -UserName $script:Settings.WinRmAccount -Message "Enter password for $($script:Settings.WinRmAccount) (WinRM access)" }
-            catch { Write-Host "  [!] Credential prompt cancelled, using current user." -ForegroundColor Yellow }
+            if ($WinRmPassPlain) {
+                # Non-interactive path (SSH/scripted) - convert immediately, never stored
+                $ss = ConvertTo-SecureString $WinRmPassPlain -AsPlainText -Force
+                $winCred = New-Object PSCredential($script:Settings.WinRmAccount, $ss)
+                Write-Host "  [Remote] Using supplied account: $($script:Settings.WinRmAccount)" -ForegroundColor DarkCyan
+            } else {
+                try { $winCred = Get-Credential -UserName $script:Settings.WinRmAccount -Message "Enter password for $($script:Settings.WinRmAccount) (WinRM access)" }
+                catch { Write-Host "  [!] Credential prompt cancelled, using current user." -ForegroundColor Yellow }
+            }
         }
 
         # Check for collector JSONs
