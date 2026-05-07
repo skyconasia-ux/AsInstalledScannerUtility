@@ -2,7 +2,7 @@
 
 ---
 
-## CURRENT CHECKPOINT — 2026-05-07 (Sessions 14-16)
+## CURRENT CHECKPOINT — 2026-05-07 (Sessions 14-17)
 
 ### Completed
 - **Fixed Print Behavior stale value** - `cas||casdownaction` reads from DRE (authoritative), not DCE cache.
@@ -21,7 +21,20 @@
 - **Fixed BCP null-byte corruption** - `Get-BcpLines` now reads file as ASCII and strips `\x00` bytes globally; affected `primarypin` NULL fields returning `"\0"` (non-empty) instead of empty string.
 - **Improved Installed Components section** - added SystemName (f[1] from `cas_installedsoftware`, was ignored); renamed Desc->ExtraInfo, Date->LastUsed; HTML groups rows by system under dark blue headers; FULL.txt groups under `=== SystemName ===`; metadata JSON includes `systemName`/`lastUsed`. Tested: CSTEMP (8 comps) and DC02-MAIN (6 comps).
 - **Added multi-server environment support** - `Collect-RemoteServerData` via WinRM; server discovery from `cas_installedsoftware` SystemNames; SQL env key resolved (`.\SQLExpress` -> `HOSTNAME\instance`); HTML "Environment & Servers" section with topology table (role->servers chips) and per-server collapsible cards (Primary/WinRM OK/WinRM Failed); new Environment summary tiles row; graceful failure with reason string. Tested: CSTEMP (primary) + DC02-MAIN (WinRM failed, expected). Topology correctly shows both servers for shared roles (DCE, DRE, DWS, DME).
-- Commits: `28c761f`, `620b728`, `feac9c9`, `4b46557`, `45aac65`, `825dac6`, `8368e85`, `d55026c`, `d54dc5f`, `479de8c`, `38d64ad`, `8b5dbbe`.
+- **Added multi-server MultiB features (Session 17)**:
+  - Menu options 5 LOCAL COLLECTOR, 6 BUILD COMBINED REPORT, 7 SETTINGS/ACCESS
+  - `ais_settings.json` persistent settings: RemoteScanMode (winrm/sql-only/collector), WinRmAccountType, WinRmAccount, WinRmPort, SqlAuthMode, SqlAccount, CollectedResultsFolder, StaleThresholdHours - **passwords never stored**
+  - `Run-Settings`: interactive settings menu (save/reset/cancel)
+  - `Run-LocalCollector`: scans local server without SQL, exports `AsInstalledScanner_<Server>_<Stamp>.json+txt` to CollectedResults folder
+  - `Run-BuildCombined`: imports all collector JSONs, matches by server name, builds full combined HTML report
+  - `Write-LocalCollectorJson` / `Find-CollectorJson` / `Import-CollectorJson` helpers
+  - `Collect-RemoteServerData`: optional `[PSCredential]$Credential` param; splatted to `Invoke-Command`
+  - `Run-After`: settings-aware - checks scan mode, imports matching collector JSONs, supports supplied WinRM credential
+  - Badge types: Local Collector (dark blue), SQL-only (gold), Collector Unmatched (purple), import timestamp + stale warning
+  - Firewall/Access Requirements HTML section: SQL port, WinRM port, scan mode, account type (no passwords), read-only assurance statement
+  - CSS: `srv-collector`, `srv-sqlonly`, `srv-unmatched`, `lc-import-info`, `srv-scan-warn`, `firewall-assurance`
+  - Tested: LOCAL COLLECTOR exports JSON; BUILD COMBINED imports and matches; AFTER imports CSTEMP collector JSON, WinRM fails gracefully for DC02-MAIN
+- Commits: `28c761f`, `620b728`, `feac9c9`, `4b46557`, `45aac65`, `825dac6`, `8368e85`, `d55026c`, `d54dc5f`, `479de8c`, `38d64ad`, `8b5dbbe`, `9530ecf`, `7536935`.
 
 ### Pending
 - Add `cas||workflowfolderslastupdatetime` to `$EQVarNoise` (false-positive suppression in Compare mode)
@@ -30,6 +43,7 @@
 - (Future) Replace raw datetime strings in Last Used / sync timestamps with formatted dates
 - (Future) Enable WinRM on DC02-MAIN and verify remote scan populates correctly
 - (Future) Add `Before` mode multi-server discovery (currently only `After`/`Full` do remote scans)
+- (Future) Test SETTINGS menu interactively on the VM console
 
 ---
 
