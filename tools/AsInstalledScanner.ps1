@@ -1629,8 +1629,98 @@ function Build-DirSyncHtml {
     if (-not $xml) {
         return "<p style='color:#aaa;padding:8px;font-size:12px'>No directory sync configuration found.</p>"
     }
-    try { $doc = [xml]$xml } catch { return "<p style='color:#aaa;padding:8px;font-size:12px'>Could not parse AD sync settings.</p>" }
+    try { $doc = [xml]$xml } catch {
+        return "<p style='color:#aaa;padding:8px;font-size:12px'>Could not parse AD sync settings.</p>"
+    }
 
+    # ---- local helpers ----
+    # Checkbox: -1 or 1 = checked
+    function DSCb { param([string]$v,[string]$label)
+        $on = ($v -eq '-1' -or $v -eq '1')
+        $icon = if ($on) { "<span class='eq-on'>&#9745;</span>" } else { "<span class='eq-off'>&#9744;</span>" }
+        "<span class='ds-cb'>$icon $(HE $label)</span>"
+    }
+    # Blank-safe field value
+    function DSVal { param([string]$v)
+        if ($v -and $v.Trim()) { HE $v.Trim() } else { "<span class='ds-empty'>(not mapped)</span>" }
+    }
+    # Section sub-header inside a server/container block
+    function DSSec { param([string]$t) "<div class='ds-sec-hdr'>$(HE $t)</div>" }
+
+    # ---- Filtering block ----
+    function DS-FilterBlock { param($node, [bool]$atCtrLevel)
+        $h = DSSec 'Filtering'
+        if ($atCtrLevel) {
+            $h += "<div class='ds-ctr-note'>&#9745; Filtering is specified at the container level</div>"
+        } else {
+            $sf = if ($node.SearchFilter -and $node.SearchFilter.Trim()) { HE $node.SearchFilter.Trim() } else { "<span class='ds-empty'>(none)</span>" }
+            $h += "<table class='kv ds-inner'>"
+            $h += "<tr><td class='k'>Search filter</td><td class='v'>$sf</td></tr>"
+            $h += '</table>'
+        }
+        return $h
+    }
+
+    # ---- Field Mappings block ----
+    function DS-MappingsBlock { param($node, [bool]$atCtrLevel)
+        $h = DSSec 'Field Mappings'
+        if ($atCtrLevel) {
+            $h += "<div class='ds-ctr-note'>&#9745; Mappings are specified at the container level</div>"
+        } else {
+            $ra = $node.RowAttributes
+            $h += "<table class='kv ds-inner'>"
+            $h += "<tr><td class='k'>Account name</td><td class='v'>$(DSVal $ra.AccountName)</td></tr>"
+            $h += "<tr><td class='k'>Display name</td><td class='v'>$(DSVal $ra.DisplayName)</td></tr>"
+            $h += "<tr><td class='k'>Email address</td><td class='v'>$(DSVal $ra.EMailAddress)</td></tr>"
+            $h += "<tr><td class='k'>Primary PIN</td><td class='v'>$(DSVal $ra.UserPrimaryPIN)</td></tr>"
+            $h += "<tr><td class='k'>Secondary PIN</td><td class='v'>$(DSVal $ra.UserPINSecondaryPIN)</td></tr>"
+            $h += "<tr><td class='k'>Alternate PIN</td><td class='v'>$(DSVal $ra.UserAlternatePIN)</td></tr>"
+            $h += "<tr><td class='k'>Department</td><td class='v'>$(DSVal $ra.Department)</td></tr>"
+            $h += "<tr><td class='k'>Location</td><td class='v'>$(DSVal $ra.Location)</td></tr>"
+            $h += "<tr><td class='k'>Color quota</td><td class='v'>$(DSVal $ra.UserColorQuota)</td></tr>"
+            $h += "<tr><td class='k'>Home print server</td><td class='v'>$(DSVal $ra.UserHomeServer)</td></tr>"
+            $h += "<tr><td class='k'>Home scan folder</td><td class='v'>$(DSVal $ra.HomeFolder)</td></tr>"
+            $h += "<tr><td class='k'>Delegates</td><td class='v'>$(DSVal $ra.Delegates)</td></tr>"
+            $h += '</table>'
+        }
+        return $h
+    }
+
+    # ---- Synchronization block ----
+    function DS-SyncBlock { param($node, [bool]$atCtrLevel)
+        $h = DSSec 'Synchronization'
+        if ($atCtrLevel) {
+            $h += "<div class='ds-ctr-note'>&#9745; Synchronization is specified at the container level</div>"
+        } else {
+            $freq = if ($node.UpdateFrequency -match '^\d+$') { "$($node.UpdateFrequency) minutes" } else { '(not set)' }
+            $noEnforce = ($node.EnforceDeptLimits -eq '0')   # EnforceDeptLimits=0 means "do NOT enforce"
+            $h += "<table class='kv ds-inner'>"
+            $h += "<tr><td class='k' colspan='2'><strong>Updates to be applied</strong></td></tr>"
+            $h += "<tr><td class='k sub1'>Adds</td><td class='v'>$(DSCb $node.SyncAdds 'Adds')</td></tr>"
+            $h += "<tr><td class='k sub1'>Changes</td><td class='v'>$(DSCb $node.SyncChanges 'Changes')</td></tr>"
+            $h += "<tr><td class='k sub1'>Deletes</td><td class='v'>$(DSCb $node.SyncDeletes 'Deletes')</td></tr>"
+            $noEnfIcon = if ($noEnforce) { "<span class='eq-on'>&#9745;</span>" } else { "<span class='eq-off'>&#9744;</span>" }
+            $h += "<tr><td class='k' colspan='2'><span class='ds-cb'>$noEnfIcon Do not enforce account limits for users in auto-created departments</span></td></tr>"
+            $h += "<tr><td class='k'>Automatic synchronization</td><td class='v'>$(DSCb $node.DoAutoSync 'Enabled')</td></tr>"
+            $h += "<tr><td class='k'>Interval</td><td class='v'>$(HE $freq)</td></tr>"
+            $h += '</table>'
+        }
+        return $h
+    }
+
+    # ---- Container detail block ----
+    function DS-ContainerBlock { param($c)
+        $dn = if ($c.ContainerDN -and $c.ContainerDN.Trim()) { $c.ContainerDN.Trim() } else { '(unknown)' }
+        $h  = "<details class='ds-ctr-detail'><summary><span class='ds-ctr-icon'>&#128193;</span> $(HE $dn)</summary>"
+        $h += "<div class='ds-ctr-body'>"
+        $h += DS-FilterBlock   $c $false
+        $h += DS-MappingsBlock $c $false
+        $h += DS-SyncBlock     $c $false
+        $h += "</div></details>"
+        return $h
+    }
+
+    # ---- Main render ----
     $html += AG 'Active Directory'
 
     $servers = $doc.ADSyncSettings.ChildNodes
@@ -1643,28 +1733,40 @@ function Build-DirSyncHtml {
         $dc        = if ($srv.DomainController) { $srv.DomainController } else { '' }
         $partition = if ($srv.ApplicationPartition -and $srv.ApplicationPartition.Trim()) { $srv.ApplicationPartition } `
                      elseif ($srv.Domain -and $srv.Domain.Trim()) { $srv.Domain } else { '(not set)' }
-        $authUser  = if ($srv.AuthUserName -and $srv.AuthUserName.Trim()) { '●●●●●● (configured)' } else { 'Not configured' }
-        $autoSync  = NOn $srv.DoAutoSync
-        $freqMin   = if ($srv.UpdateFrequency -match '^\d+$') { "$($srv.UpdateFrequency) minutes" } else { '(not set)' }
+        $authUser  = if ($srv.AuthUserName -and $srv.AuthUserName.Trim()) { "<span style='color:#555'>&#11044;&#11044;&#11044;&#11044;&#11044;&#11044; <small style='color:#888'>(configured)</small></span>" } else { "<span class='dc-off'>Not configured</span>" }
 
-        $html += "<details class='net-detail' open><summary>$(HE $dc)</summary>"
-        $html += "<table class='kv'>"
+        $filterAtCtr  = ($srv.UseContainerLevelSearchFilterSettings -eq '-1')
+        $mappingAtCtr = ($srv.UseContainerLevelFieldMappingSettings  -eq '-1')
+        $syncAtCtr    = ($srv.UseContainerLevelGeneralSyncSettings   -eq '-1')
+
+        # Server header card
+        $html += "<div class='ds-srv-hdr'><span class='ds-srv-icon'>&#128279;</span> $(HE $dc)"
+        if ($partition -ne '(not set)') { $html += " <span class='ds-partition'>($(HE $partition))</span>" }
+        $html += "</div>"
+        $html += "<div class='ds-srv-body'>"
+
+        # Server connection info
+        $html += "<table class='kv ds-inner'>"
         $html += ARowH 'Domain Controller' (HE $dc)
         $html += ARowH 'Naming Context / Partition' (HE $partition)
         $html += ARowH 'Auth username' $authUser
-        $html += ARowH 'Auto sync' $autoSync
-        $html += ARowH 'Update frequency' (HE $freqMin)
+        $html += "</table>"
+
+        # Server-level Filtering / Field Mappings / Synchronization
+        $html += DS-FilterBlock   $srv $filterAtCtr
+        $html += DS-MappingsBlock $srv $mappingAtCtr
+        $html += DS-SyncBlock     $srv $syncAtCtr
 
         # Containers
         $containers = $srv.Containers
         if ($containers -and $containers.ChildNodes.Count -gt 0) {
-            $html += "<tr><td colspan='2' class='sec-lbl'>Containers</td></tr>"
+            $html += "<div class='ds-ctr-hdr-row'>Containers <span class='ds-ctr-count'>($($containers.ChildNodes.Count))</span></div>"
             foreach ($c in $containers.ChildNodes) {
-                $dn = if ($c.ContainerDN) { $c.ContainerDN } else { '' }
-                $html += ARS1 'DN' (HE $dn)
+                $html += DS-ContainerBlock $c
             }
         }
-        $html += '</table></details>'
+
+        $html += "</div>" # end ds-srv-body
     }
 
     return $html
@@ -2102,6 +2204,31 @@ details.net-detail summary{padding:7px 12px;cursor:pointer;font-size:12px;font-w
 details.net-detail summary:hover{background:#eaeff9}
 details.net-detail[open] summary{border-bottom:1px solid #dde4f0}
 details.net-detail table.kv{margin:0}
+/* Directory Services */
+.ds-srv-hdr{margin:14px 0 0;padding:8px 12px;background:#1a3a8a;color:#fff;border-radius:6px 6px 0 0;font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px}
+.ds-srv-icon{font-size:15px}
+.ds-partition{font-weight:400;font-size:11px;opacity:.85}
+.ds-srv-body{border:1px solid #c5d0e8;border-top:none;border-radius:0 0 6px 6px;padding:10px 12px 14px;margin-bottom:8px;background:#fafbff}
+table.ds-inner{width:100%;border-collapse:collapse;margin:4px 0 8px;font-size:12px}
+table.ds-inner td{padding:5px 8px;border-bottom:1px solid #edf0f7;vertical-align:top}
+table.ds-inner td.k{width:38%;color:#3a4a6a;font-weight:500}
+table.ds-inner td.v{color:#222}
+table.ds-inner td.k.sub1{padding-left:24px;color:#555;font-weight:400;font-style:italic}
+.ds-sec-hdr{margin:12px 0 4px;padding:4px 8px;background:#eef3fb;border-left:3px solid #4a6da8;font-size:10px;font-weight:700;color:#2a3a6a;text-transform:uppercase;letter-spacing:.4px;border-radius:0 3px 3px 0}
+.ds-ctr-note{padding:6px 8px;font-size:12px;color:#3a5a8a;background:#f0f5ff;border-radius:4px;margin:2px 0 6px}
+.ds-empty{color:#bbb;font-style:italic}
+.ds-cb{font-size:12px;display:inline-flex;align-items:center;gap:4px}
+.ds-ctr-hdr-row{margin:14px 0 4px;font-size:11px;font-weight:700;color:#2a3a6a;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid #d0d8ec;padding-bottom:3px}
+.ds-ctr-count{font-weight:400;color:#7a8aa8}
+details.ds-ctr-detail{margin:4px 0;border:1px solid #d4dcf0;border-radius:4px;overflow:hidden}
+details.ds-ctr-detail summary{padding:7px 10px;cursor:pointer;font-size:12px;font-weight:600;color:#1a3a8a;background:#f0f4fb;user-select:none;display:flex;align-items:center;gap:6px;list-style:none}
+details.ds-ctr-detail summary::-webkit-details-marker{display:none}
+details.ds-ctr-detail summary::before{content:'▶';font-size:9px;color:#4a6da8;transition:transform .15s}
+details.ds-ctr-detail[open] summary::before{transform:rotate(90deg)}
+details.ds-ctr-detail summary:hover{background:#e4ecf8}
+details.ds-ctr-detail[open] summary{border-bottom:1px solid #d4dcf0}
+.ds-ctr-icon{font-size:13px}
+.ds-ctr-body{padding:8px 12px 12px;background:#fff}
 pre#rawpre{background:#1e1e1e;color:#d4d4d4;padding:14px;border-radius:6px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all}
 mark{background:#ffd600;color:#000;border-radius:2px}
 .hi{display:none!important}
