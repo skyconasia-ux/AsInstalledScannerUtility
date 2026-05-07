@@ -2,7 +2,7 @@
 
 ---
 
-## CURRENT CHECKPOINT — 2026-05-07 (Sessions 14-18)
+## CURRENT CHECKPOINT — 2026-05-08 (Session 19, MultiD)
 
 ### Completed
 - **Fixed Print Behavior stale value** - `cas||casdownaction` reads from DRE (authoritative), not DCE cache.
@@ -35,17 +35,28 @@
   - CSS: `srv-collector`, `srv-sqlonly`, `srv-unmatched`, `lc-import-info`, `srv-scan-warn`, `firewall-assurance`
   - Tested: LOCAL COLLECTOR exports JSON; BUILD COMBINED imports and matches; AFTER imports CSTEMP collector JSON, WinRM fails gracefully for DC02-MAIN
 - **Added per-server Windows Servers section (Session 18, MultiC)** - `Build-WinSubHtml` + `Build-WinSectionsHtml` functions; nav group "WINDOWS SERVERS" → Overview + per-server scroll links; one collapsible card per detected server (CSTEMP Primary, DC02-MAIN WinRM OK) each with 10 collapsible subsections; primary server always uses full WinData; remote uses partial WinRM/Collector data; badges: Primary/WinRM OK/Local Collector/SQL-only/Collector Unmatched/fail; TXT organized under WINDOWS SERVERS header; nav links scroll-only (no collapse); new CSS: win-srv-card/hdr/name/src-lbl, win-sub-card/hdr/title, win-noscan, win-na. Tested: both servers show correct cards and data.
-- Commits: `28c761f`, `620b728`, `feac9c9`, `4b46557`, `45aac65`, `825dac6`, `8368e85`, `d55026c`, `d54dc5f`, `479de8c`, `38d64ad`, `8b5dbbe`, `9530ecf`, `7536935`, `68aa9df`.
+- **Data parity + WinRM timeout fix (Session 19, MultiD)**:
+  - `$script:WinInventoryFull` unified scriptblock: single collection schema used by primary scan, WinRM, and Local Collector
+  - `Collect-WindowsData` calls unified block then supplements with sqlcmd for SQL config fields
+  - `Collect-RemoteServerData` passes same scriptblock to `Invoke-Command` via `.ToString()` + `[scriptblock]::Create()`
+  - All HTML/TXT subsection rendering unconditional - removed all `if ($isLocal)` branching
+  - Added OsLastBoot, DomainRole to all server cards; EqServices subsection in PM Software for all servers
+  - Source label completeness: "Primary scan -- Full", "WinRM -- Full (no SQL config)", "Local Collector Import -- Full (no SQL config)"
+  - `Test-WinRmPort`: fast TCP pre-check on 5985/5986 (3 s timeout per port) before any `Invoke-Command`
+  - `Collect-RemoteServerData` rewritten: `Start-Job` + `Wait-Job -Timeout 90` hard deadline, `New-PSSessionOption` bounded timeouts, `PSSerializer` for cross-process arg passing
+  - `Get-Credential` guard: `[Environment]::UserInteractive` check prevents blocking in SSH/non-interactive sessions
+  - Tested: CSTEMP full data parity; DC02-MAIN port-5985-open but double-hop Kerberos fast-fail in <5 s
+- Commits: `28c761f`, `620b728`, `feac9c9`, `4b46557`, `45aac65`, `825dac6`, `8368e85`, `d55026c`, `d54dc5f`, `479de8c`, `38d64ad`, `8b5dbbe`, `9530ecf`, `7536935`, `68aa9df`, `2246258`, `7021db2`, `2d74b1a`.
 
 ### Pending
-- AISAddition-MultiC.txt DONE (Session 18)
 - Add `cas||workflowfolderslastupdatetime` to `$EQVarNoise` (false-positive suppression in Compare mode)
 - Continue UI change mapping: device registration, license seats, user card enrolment, report config
 - Push to `skyconasia-ux/AsInstalledScannerUtility`
 - (Future) Replace raw datetime strings in Last Used / sync timestamps with formatted dates
-- (Future) Enable WinRM on DC02-MAIN and verify remote scan populates correctly
+- (Future) Enable WinRM on DC02-MAIN and verify remote scan populates full data parity
 - (Future) Add `Before` mode multi-server discovery (currently only `After`/`Full` do remote scans)
 - (Future) Test SETTINGS menu interactively on the VM console
+- (Future) Supply WinRM credential via `-WinRmPassPlain` arg to bypass Kerberos double-hop for cross-domain scenarios
 
 ---
 
