@@ -2,145 +2,155 @@
 
 ## Overview
 
-`Export-ServerInfo.ps1` is a single-file PowerShell script (~1280 lines). It runs locally on the target Windows Server, collects data from multiple Windows subsystems, and writes a single structured text file. No network calls, no external dependencies, no persistent state.
+`tools/AsInstalledScanner.ps1` is the current main entry point for the project. It is a PowerShell 5.1 scanner that runs against Windows print server environments and collects both server inventory data and Kofax ControlSuite / Equitrac configuration data.
+
+The root `AsInstalledScanner.bat` file is a thin launcher. It starts the PowerShell script in interactive mode when no argument is supplied, or passes a mode such as `Before`, `After`, `Compare`, or `Full` to the script for non-interactive use.
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Customer Windows Server (print server)                 │
-│                                                         │
-│  Export-ServerInfo.bat                                  │
-│       │                                                 │
-│       └─► Export-ServerInfo.ps1                         │
-│               │                                         │
-│               ├─► WMI / CIM  (hardware, OS, printers)  │
-│               ├─► Registry   (DEVMODE, drivers, spool)  │
-│               ├─► PowerShell cmdlets (printers, roles)  │
-│               ├─► .NET APIs  (printing, XML parsing)    │
-│               └─► Filesystem (software detection)       │
-│                                                         │
-│       ServerInfo_<HOST>_<TS>.txt  ◄── structured output │
-│       ExportLog_<HOST>_<TS>.txt   ◄── audit log         │
-└─────────────────────────────────────────────────────────┘
-         │
-         │  (copy manually)
-         ▼
-┌─────────────────────────────────────────────────────────┐
-│  ConsultantApp                                          │
-│  data\Deployment\PMS\<CustomerName>\ServerInfo_*.txt   │
-│                                                         │
-│  AI reads structured sections → answers questions       │
-└─────────────────────────────────────────────────────────┘
+Customer Windows print server / scanner host
+|
++-- AsInstalledScanner.bat
+    |
+    +-- tools/AsInstalledScanner.ps1
+        |
+        +-- Windows inventory
+        |   +-- CIM / WMI
+        |   +-- Registry
+        |   +-- PrintManagement cmdlets
+        |   +-- Network, storage, software, SQL Server, roles/features
+        |
+        +-- ControlSuite / Equitrac inventory
+        |   +-- SQL Server eqcas data
+        |   +-- SQLite EQVar databases
+        |   +-- Kofax / Equitrac registry and service data
+        |   +-- Workflow, pricing, pull group, authentication, SMTP, quota,
+        |       device, license, and directory sync settings
+        |
+        +-- Output folder
+            +-- *_FULL.txt
+            +-- *_SUMMARY.txt
+            +-- *_REPORT.html
+            +-- metadata.json
+            +-- raw snapshot files used by Compare mode
 ```
+
+The project also keeps older and lower-level helper scripts under `tools/` for Equitrac-specific discovery:
+
+- `EQ-Snapshot.ps1` captures BEFORE or AFTER Equitrac / ControlSuite state.
+- `EQ-Diff.ps1` compares snapshot folders and reports changed SQL rows, EQVar keys, registry values, and file timestamps.
+- `Export-EquitracConfig.ps1` exports ControlSuite / Equitrac configuration details.
+
+Those helpers are useful for targeted investigation, but `tools/AsInstalledScanner.ps1` is the consolidated scanner/report generator.
+
+---
+
+## Runtime Modes
+
+| Mode | Purpose |
+|------|---------|
+| `Before` | Capture a baseline snapshot before changes. |
+| `After` | Capture current state and write text, JSON, and HTML report outputs. |
+| `Compare` | Compare the latest Before and After snapshot folders. |
+| `Full` | Run After and then Compare. |
+| `Settings` | Configure scanner settings used by remote, SQL, or collector workflows. |
+| `LocalCollector` | Collect local Windows/server data for later combined reporting. |
+| `BuildCombined` | Build a combined report from collected local/remote data. |
 
 ---
 
 ## Design Decisions
 
-### 1. Single PS1 file + thin BAT launcher
-**Decision:** All logic in one PowerShell file. The BAT does nothing except call it.
+### 1. Main scanner plus thin launcher
 
-**Reason:** Customers can review one file. No module installation, no `Import-Module`. Xcopy deploy, xcopy remove.
+**Decision:** The current scanner logic lives in `tools/AsInstalledScanner.ps1`; `AsInstalledScanner.bat` only locates and invokes it.
 
-**Trade-off:** The script is long (~1280 lines). Accepted; sections are clearly delimited with `# === SECTION N ===` comments.
+**Reason:** Deployment stays simple for customer sites while keeping the main implementation in one reviewable PowerShell script.
 
-### 2. Plain-text structured output (not JSON/XML/CSV)
-**Decision:** Output is human-readable indented text, not machine-native format.
+### 2. Local-first collection with optional remote support
 
-**Reason:** ConsultantApp's AI ingestion works on freeform text; JSON would be harder for humans to visually review and spot gaps. The structure is consistent enough for pattern extraction.
+**Decision:** The scanner can collect from the local host and also includes settings and code paths for WinRM, SQL-only, and collector-style workflows.
 
-**Trade-off:** Parsing requires regex/pattern matching rather than schema validation. See [`docs/patterns.md`](docs/patterns.md).
+**Reason:** Some customer environments allow direct local scanning, while others require collecting Windows data separately or limiting access to SQL/configuration sources.
 
-### 3. Two output files (data + log)
-**Decision:** Data goes to `ServerInfo_*.txt`, every query/action goes to `ExportLog_*.txt`.
+### 3. Human-readable and machine-readable outputs
 
-**Reason:** Cybersecurity review — the customer or their IT security team can audit exactly what was queried, in what order, with what result. The log file is also useful for debugging failures.
+**Decision:** The scanner writes structured text, summary text, metadata JSON, and a self-contained HTML report.
 
-### 4. In-memory accumulation, flush at end
-**Decision:** `Write-Out` appends to `$script:outLines`; `Write-Log` appends to `$script:logLines`. Both are written to disk at the very end.
+**Reason:** Consultants need a readable report for review and handoff, while downstream tooling can consume the text and JSON outputs.
 
-**Reason:** Avoids partial/corrupt files if the script is interrupted mid-run. Avoids repeated file I/O.
+### 4. Snapshot and diff workflow
 
-**Gotcha:** No mid-script file writes. Any code that calls `Add-Content` or `Out-File` during the run breaks this contract.
+**Decision:** Before/After/Compare modes preserve raw snapshot files and generate comparison reports.
 
-### 5. Registry over WMI for driver data
-**Decision:** `dmICMMethod` is read from the Default DevMode registry binary (offset 188), not `Win32_Printer.ICMMethod`.
+**Reason:** ControlSuite and Equitrac configuration changes can be spread across SQL tables, SQLite EQVar keys, registry values, and files. A diff workflow makes those changes visible after a UI or configuration update.
 
-**Reason:** Third-party drivers (FujiFilm FF, Kofax) do not populate `Win32_Printer.ICMMethod` reliably. It always returns 0 for these drivers. The registry binary is authoritative.
+### 5. Registry and driver-specific print data
 
-**Location:** `HKLM:\SYSTEM\CurrentControlSet\Control\Print\Printers\<name>\Default DevMode`  
-**Offset:** 188 (DWORD, little-endian) = `dmICMMethod` field per DEVMODE spec.
+**Decision:** Print queue details use Windows print cmdlets where possible, with registry fallbacks for driver data such as DEVMODE fields.
 
-### 6. Get-PrinterProperty for installable options (physical queues)
-**Decision:** `Get-PrinterProperty -PrinterName <name>` is the correct API for finisher/staple/punch/booklet installable options on physical printer queues.
-
-**Reason:** Neither PrintCapabilities XML, System.Printing, nor WMI expose these for FujiFilm FF drivers. `Get-PrinterProperty` reads the driver's `FeatureKeyword` binary blob in `PrinterDriverData`, which contains `Config:OP_*` and `Config:DC_FIN_*` entries in human-readable ASCII.
-
-**Limitation:** Virtual/follow-you queues (FF Multi-model Print Driver 2) do not populate `FeatureKeyword`. `Get-PrinterProperty` returns nothing for them. Their installable options are stored in proprietary binary blobs (`PrinterData1..N`) in `PrinterDriverData` with an undocumented format.
-
-### 7. Get-PrinterDriver -PrinterEnvironment for x86/x64 split
-**Decision:** Driver architecture is determined by querying `Get-PrinterDriver` with `-PrinterEnvironment 'Windows x64'` and `-PrinterEnvironment 'Windows NT x86'` separately.
-
-**Reason:** `Get-PrinterDriver` without `-PrinterEnvironment` returns all drivers from all environments but leaves the `Environment` property blank, making it impossible to distinguish architectures from the object itself.
+**Reason:** Third-party print drivers do not always expose complete data through WMI or standard PrintTicket XML.
 
 ---
 
-## Data Sources by Section
+## Data Sources
 
-| Section | Primary Source | Fallback |
-|---------|---------------|---------|
-| System Identity | `Get-CimInstance Win32_ComputerSystem`, `Win32_BIOS`, `Win32_BaseBoard` | Registry `HKLM:\HARDWARE\DESCRIPTION` |
-| OS | `Get-CimInstance Win32_OperatingSystem` | — |
-| Hardware | `Win32_Processor`, `Win32_PhysicalMemory` | — |
-| Storage | `Get-PSDrive` (logical), `Win32_DiskDrive` | — |
-| Network | `Get-NetAdapter`, `Get-NetIPConfiguration`, `Get-DnsClientServerAddress` | — |
-| Domain | `Get-ADDomain`, `[System.DirectoryServices.ActiveDirectory.Domain]` | `$env:USERDOMAIN` |
-| Software | Registry uninstall hives + known service/path checks | — |
-| Roles | `Get-WindowsFeature` | — |
-| Database | Registry `HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server` | — |
-| Print queues | `Get-Printer`, `Get-PrintConfiguration`, PrintTicket XML | `Win32_Printer` (WMI) |
-| Printer drivers | `Get-PrinterDriver -PrinterEnvironment` (x64 and x86) | — |
-| ICM Method | `Default DevMode` registry binary byte 188 | — |
-| Color mgmt | `psk:PageColorManagement` from PrintTicket XML | — |
-| Installable opts | `Get-PrinterProperty` (`Config:OP_*`, `Config:DC_FIN_*`) | — |
-| Spool folder | `HKLM:\...\Print\Printers` `DefaultSpoolDirectory` | Default path |
+| Area | Primary Sources |
+|------|-----------------|
+| System identity | `Win32_ComputerSystem`, `Win32_BIOS`, `Win32_BaseBoard`, registry fallback |
+| Operating system | `Win32_OperatingSystem` |
+| Hardware and storage | CIM/WMI, `Get-PSDrive`, disk and memory classes |
+| Network | `Get-NetAdapter`, `Get-NetIPConfiguration`, DNS client cmdlets |
+| Domain | Active Directory cmdlets/APIs where available, environment fallback |
+| Installed software | Registry uninstall hives, known services, known paths |
+| Windows roles/features | `Get-WindowsFeature` when available |
+| SQL Server | SQL Server registry keys, services, and SQL connection data |
+| Print queues | `Get-Printer`, `Get-PrintConfiguration`, PrintTicket XML, registry |
+| Print drivers | `Get-PrinterDriver` by printer environment |
+| ControlSuite / Equitrac SQL | `eqcas` SQL tables and row/content dumps |
+| ControlSuite / Equitrac EQVar | SQLite EQVar databases such as DCE and DRE config stores |
+| ControlSuite / Equitrac system data | Kofax, Equitrac, Nuance, Tungsten, FLEXlm/Flexera registry/service/file locations |
+
+---
+
+## Outputs
+
+A normal `After` or `Full` run writes to a timestamped folder under `Output/`. The main report artifacts are:
+
+| File | Purpose |
+|------|---------|
+| `After_FULL.txt` | Full structured text export for review and downstream ingestion. |
+| `After_SUMMARY.txt` | Short count and key-setting summary. |
+| `After_REPORT.html` | Self-contained HTML report for browser review. |
+| `metadata.json` | Machine-readable metadata and high-level scan details. |
+| `eqvar_*.tsv`, `bcp_*.txt` | Raw snapshot inputs used by comparison workflows. |
+
+Compare mode produces diff-oriented text and HTML outputs that show changed configuration values between snapshots.
 
 ---
 
 ## Known Limitations
 
 ### Virtual driver installable options
-FF Multi-model Print Driver 2 (follow-you/ControlSuite virtual queue) stores its device option settings (Punch/Staple/Booklet installed, passcode length, user prompts) in proprietary binary blobs (`PrinterData1..N`) under `PrinterDriverData`. There is no documented API to decode these. The export notes this as a limitation and directs the reviewer to Printer Properties > Device Settings tab.
 
-### PrintCapabilities XML vs Get-PrinterProperty
-FujiFilm Apeos PCL6 PrintCapabilities XML does not expose stapling/finishing Feature nodes at all. `Get-PrinterProperty` is the correct API — it reads the `FeatureKeyword` blob the driver writes to `PrinterDriverData`. Do not attempt to use PrintCapabilities XML for installable options on FF drivers.
+FF Multi-model Print Driver 2 and similar virtual/follow-you queues may store hardware option data in proprietary driver blobs. The scanner can identify that the data is not exposed through standard APIs, but it may not be able to decode every setting.
 
-### WMI ICMMethod
-`Win32_Printer.ICMMethod` always returns 0 for third-party drivers. Use DEVMODE binary offset 188.
+### PrintCapabilities XML coverage
 
-### FujiFilm Apeos PCL6 PrintCapabilities namespace
-Uses `xmlns:ns0000="http://www.fujifilm.com/fb/2021/04/printing/printticket"` for device-specific options. Standard `psk:` namespace still applies to job settings (duplex, color, etc.).
+Some FujiFilm and third-party print drivers omit finishing features from standard PrintCapabilities XML. The scanner uses `Get-PrinterProperty` and registry data where those sources are more reliable.
 
-### Get-WindowsFeature availability
-Only available on Windows Server with RSAT. Not available on Windows 10/11 workstations. Script handles this gracefully.
+### WMI print driver fields
+
+Some WMI printer fields are incomplete for third-party drivers. For example, ICM method is read from the DEVMODE registry binary rather than relying on `Win32_Printer.ICMMethod`.
+
+### Windows feature availability
+
+`Get-WindowsFeature` is only available on Windows Server systems with the relevant module installed. The scanner handles missing feature cmdlets gracefully.
 
 ---
 
-## Output File Format
+## Related Documentation
 
-```
-============================================================
-AsInstalled Server Export - HOSTNAME
-Generated: YYYY-MM-DD HH:MM:SS
-============================================================
-
-[Section Name]
-FieldName: Value
-FieldName: Value
-
-[Next Section]
-...
-```
-
-Sections are delimited by `[Section Name]` headers. Fields follow a `Name: Value` pattern. Multi-line items use indented continuation. Print queue entries use `===` separator lines.
-
-See [`docs/patterns.md`](docs/patterns.md) for extraction patterns.
+- `README.md` contains run instructions and user-facing usage notes.
+- `TASKS.md` tracks completed work, backlog items, and known scanner limitations.
+- `docs/equitrac-storage-map.md` documents where confirmed ControlSuite / Equitrac settings are stored.
+- `docs/patterns.md` documents extraction patterns for structured text output.
