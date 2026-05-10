@@ -6,6 +6,17 @@ ServerInfo_*.txt
 ExportLog_*.txt
 EquitracConfig_*.txt
 TraceLog_*.txt
+Output/
+tools/Output/
+test_output/
+*_REPORT.html
+*_FULL.txt
+*_SUMMARY.txt
+COMPARE_DIFF.txt
+COMPARE_REPORT.html
+bcp_*.txt
+metadata.json
+test_report.html
 # EQ tool temp dirs (created on server, not tracked locally)
 EQ_BcpDump/
 EQ_DbQuery/

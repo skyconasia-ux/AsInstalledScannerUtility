@@ -1,0 +1,163 @@
+Enhance AsInstalledScanner to support multi-server Equitrac/ControlSuite environments using component-based discovery.
+
+Important:
+Do not assume server role defines the server purpose.
+Detect all related servers based on installed EQ/ControlSuite components, Software section System Names, services, registry/config references, and SQL connection strings.
+
+Discovery sources:
+- Equitrac Web UI Software section System Name column
+- Installed EQ/ControlSuite services
+- EQ/ControlSuite registry paths
+- EQ/ControlSuite config files
+- SQL connection strings used by CAS or related services
+- SQL Server instances containing eqcas or related EQ databases
+
+For each detected server, scan what is accessible:
+- Windows details
+- Windows Roles and Features
+- Installed EQ/ControlSuite components
+- EQ/ControlSuite services
+- Print queues / Print Server details if present
+- SQL Server details only if SQL is installed on that server
+- Relevant registry, config files, directories, ports, and processes
+
+SQL handling:
+- SQL may be local or remote.
+- SQL may be Express or Standard.
+- SQL may be shared with other applications.
+- Only focus on the SQL instance/database related to Equitrac, especially eqcas.
+- Do not scan unrelated databases deeply unless needed.
+- Show SQL mapping clearly:
+  - CAS server
+  - SQL server
+  - SQL instance
+  - Database name
+  - Connection source
+
+Multiple CAS handling:
+- Detect all servers with CAS installed.
+- For each CAS, identify which SQL server/instance/database it connects to.
+- If multiple CAS servers connect to the same eqcas database, group them under the same Equitrac environment.
+- If CAS servers connect to different databases, show them as separate Equitrac environments.
+- Do not duplicate account/device/license summaries if they come from the same eqcas database.
+
+Web UI layout:
+Group results by environment first, then server.
+
+Example:
+- Environment: eqcas on SQL01\EQINSTANCE
+  - Summary
+  - CAS Servers
+  - SQL Server / Database
+  - Server: CSTEMP
+    - Installed Components
+    - Services
+    - Windows Roles
+    - Registry
+    - Directories
+  - Server: DC02-MAIN
+    - Installed Components
+    - Services
+    - Windows Roles
+    - Print Server
+    - Registry
+    - Directories
+
+Remote scan behavior:
+- Use PowerShell Remoting / WinRM where possible.
+- If remote scan fails, still show the server as detected.
+- Mark reason clearly:
+  - Remote scan failed
+  - WinRM unavailable
+  - Permission denied
+  - Offline
+  - DNS resolution failed
+
+Requirements:
+- Detection must be component-based, not role-based.
+- Do not mix all servers into one long section.
+- Keep raw output organized by environment and server.
+- Keep web UI clean with expandable server cards.
+- Make it easy to compare Server 1, Server 2, SQL Server, and any CAS servers.
+
+CLARIFICATION:
+
+Add support for multiple instances of the same Equitrac/ControlSuite component.
+
+Important:
+Do not assume there is only one of each component.
+
+The environment may have multiple:
+- CAS servers
+- DRE / Print Servers
+- DCE servers
+- DWS servers
+- DME servers
+- SPE servers
+- SLP servers
+- Web Client servers
+- SQL servers / SQL instances
+
+Discovery logic:
+- Treat every detected component installation as an individual component node.
+- Group by environment first, then server, then component.
+- A server can have multiple components.
+- A component type can exist on multiple servers.
+
+Example layout:
+- Environment: eqcas on SQL01\EQINSTANCE
+  - CAS Servers
+    - CSTEMP
+    - CAS02
+  - DRE / Print Servers
+    - PRINT01
+    - PRINT02
+    - DC02-MAIN
+  - DCE Servers
+    - CSTEMP
+    - DC02-MAIN
+  - DWS Servers
+    - CSTEMP
+    - WEB01
+  - SQL Server / Database
+    - SQL01\EQINSTANCE / eqcas
+
+Per-server layout:
+- Server: CSTEMP
+  - Components installed:
+    - CAS
+    - DCE
+    - DME
+    - DWS
+    - Web Client
+  - Services
+  - Registry
+  - Directories
+
+- Server: PRINT01
+  - Components installed:
+    - DRE - Windows
+    - DCE
+  - Print Server details
+  - Services
+  - Registry
+  - Directories
+
+Rules:
+- Do not overwrite or collapse duplicate component types.
+- If two servers both have DRE, show both.
+- If two servers both have CAS, show both and map each CAS to its SQL database.
+- If multiple CAS servers point to the same eqcas database, group them under the same environment.
+- If they point to different databases, show separate environments.
+- If component relationship is unknown, show it as “Detected, relationship unknown” instead of hiding it.
+
+Web UI:
+- Add summary counts:
+  - Total Servers Detected
+  - CAS Servers
+  - DRE / Print Servers
+  - DCE Servers
+  - DWS Servers
+  - SQL Servers
+- Use expandable groups so multiple servers/components do not make the page messy.
+- Keep raw output organized by environment > server > component.

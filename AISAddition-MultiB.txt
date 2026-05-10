@@ -1,0 +1,202 @@
+Implement multi-server support for the ControlSuite Config Scanner without breaking the original workflow.
+
+Current menu must remain working:
+
+1. BEFORE   Capture baseline (before UI changes)
+2. AFTER    Capture current state + HTML report
+3. COMPARE  Diff latest Before vs After
+4. FULL     After + Compare in one run
+Q. Quit
+
+Add these new menu options:
+
+5. LOCAL COLLECTOR
+   Scan this server only and export local result JSON/TXT.
+   Use this when WinRM is disabled and the script is copied to another Equitrac/ControlSuite server.
+
+6. BUILD COMBINED REPORT
+   Import collected JSON files from the shared CollectedResults folder and build one combined Web UI report.
+
+7. SETTINGS / ACCESS
+   Configure:
+   - SQL connection method
+   - CollectedResults folder path
+   - Remote scan mode: SQL-only / WinRM / Local Collector Import
+   - Stale import threshold
+
+Main goal:
+Support multi-server Equitrac/ControlSuite environments where CAS, DRE, DCE, DWS, DME, SPE, Web Client, Print Server, and SQL may be installed across different servers.
+
+Discovery logic:
+- Detect related servers from the Equitrac Software / Installed Components System Name column.
+- Treat each unique System Name as a related server.
+- Also detect related servers from EQ/ControlSuite services, registry/config references, and SQL connection strings where possible.
+- Do not assume only one CAS, DRE, DCE, DWS, SQL server, or Print Server.
+- Group by environment first, then server, then component.
+
+SQL handling:
+- SQL access is required for normal AFTER/FULL scans.
+- SQL may be local or remote.
+- SQL may be Express or Standard.
+- SQL may be shared with other applications.
+- Focus only on the SQL instance/database related to Equitrac, especially eqcas.
+- Show SQL mapping clearly:
+  - CAS server
+  - SQL server
+  - SQL instance
+  - Database name
+  - Connection source
+- If multiple CAS servers point to the same eqcas database, group them under the same environment.
+- If CAS servers point to different databases, show them as separate environments.
+- Do not duplicate account/device/license summaries if they come from the same eqcas database.
+
+Credential/access handling:
+- Add an access setup step, but do not store passwords.
+- SQL Access options:
+  - Windows Authentication using current user
+  - Windows Authentication using supplied domain/local account
+  - SQL Authentication using supplied SQL account
+  - SQL sa account
+  - SQL read-only/view account
+- Windows/Remote Server Access options:
+  - Current Windows user
+  - Supplied domain admin account
+  - Supplied domain account
+  - Supplied local administrator account per server
+  - Supplied local user account per server
+  - Skip remote scan
+- Use Get-Credential or secure password input.
+- Never print or save passwords in console, HTML, TXT, JSON, logs, or checkpoints.
+- Show only the account name/type used.
+
+Remote scan modes:
+1. SQL-only
+- No remote Windows scanning.
+- Use only SQL/eqcas and Software section data.
+- Mark server-local details as “Not scanned - SQL-only mode”.
+
+2. SQL + WinRM
+- Use PowerShell Remoting / Invoke-Command.
+- Required ports:
+  - TCP 5986 WinRM HTTPS preferred
+  - TCP 5985 WinRM HTTP fallback
+- Use only read-only Get-* commands.
+- Do not run Set-*, New-*, Remove-*, Start-*, Stop-*, Restart-*, Install-*, Uninstall-*, or config-changing commands.
+- If WinRM fails, do not stop the scan. Show reason:
+  - WinRM unavailable
+  - Permission denied
+  - Offline/network unreachable
+  - DNS resolution failed
+
+3. SQL + Local Collector Import
+- Use this when WinRM is disabled or not allowed.
+- Allow this same script to be copied and run locally on each related server.
+- LOCAL COLLECTOR mode scans only the current server and exports:
+  - AsInstalledScanner_<ServerName>_<Timestamp>.json
+  - AsInstalledScanner_<ServerName>_<Timestamp>.txt
+- LOCAL COLLECTOR should collect:
+  - Windows details
+  - Roles and Features
+  - Installed EQ/ControlSuite components
+  - EQ/ControlSuite services
+  - Print queues / Print Server details
+  - Registry/config/directories related to EQ/ControlSuite
+  - SQL details only if SQL is installed locally
+- LOCAL COLLECTOR must not require SQL unless local SQL details are selected.
+
+CollectedResults folder:
+- Add configurable import folder path, example:
+  - C:\AsInstalledScanner\CollectedResults
+  - \\fileserver\AsInstalledScanner\CollectedResults
+- BUILD COMBINED REPORT reads all JSON files from this folder.
+- AFTER/FULL may also import existing collector JSON files if available.
+- Match imported files to detected servers by:
+  - Server name
+  - FQDN
+  - IP address, if available
+- If imported result matches a detected server, mark:
+  - Detected from Equitrac Software section
+  - Scanned using Local Collector Import
+- If a result file exists for a server not detected in SQL, still show it as:
+  - Imported local collector result
+  - Relationship unknown
+- Show collection timestamp.
+- If imported file is older than the configured stale threshold, mark:
+  - Imported result may be stale
+
+Web UI layout:
+Add or improve the “Environment & Servers” section at the top.
+
+Group results like this:
+
+Environment: <SQL Server>\<Instance> / eqcas
+- Summary tiles
+- Topology table
+- CAS Servers
+- DRE / Print Servers
+- DCE Servers
+- DWS Servers
+- SQL Server / Database
+- Imported collector files
+- Server: CSTEMP
+  - Scan method: Primary scan / WinRM / Local Collector Import / SQL-only detected
+  - Installed Components
+  - Services
+  - Windows Roles
+  - Print Server
+  - SQL Server, if present
+  - Registry
+  - Directories
+- Server: DC02-MAIN
+  - Scan method and status
+  - Same grouped sections
+
+Summary counts:
+- Total Servers Detected
+- CAS Servers
+- DRE / Print Servers
+- DCE Servers
+- DWS Servers
+- SQL Servers
+
+Topology rules:
+- A component type can exist on multiple servers.
+- A server can have multiple components.
+- Do not overwrite or collapse duplicate component types.
+- If two servers both have DRE, show both.
+- If two servers both have CAS, show both and map each CAS to its SQL database.
+- If relationship is unknown, show “Detected, relationship unknown”.
+
+Access/reporting section:
+Add a “Firewall / Access Requirements” section in the HTML report showing:
+- SQL Server port used
+- SQL Browser UDP 1434 if used
+- WinRM port used, 5986 or 5985 if used
+- Remote scan mode selected
+- Account type used, never password
+- Read-only assurance statement
+
+Read-only assurance:
+The scanner must not modify remote servers.
+Allowed write operations:
+- Write scanner result/report files only.
+
+The script must NOT:
+- modify registry values
+- restart services
+- stop/start services
+- install/uninstall software
+- change Windows roles/features
+- change SQL settings
+- update Equitrac/ControlSuite settings
+- write files to remote servers, except local collector output when run locally
+
+Keep output organized:
+- HTML report organized by Environment > Server > Component.
+- Raw TXT output organized the same way.
+- Keep each imported server’s original raw file untouched.
+- If a server is detected but cannot be scanned, still show it in the report with the reason.
+- Do not mix all servers into one long Windows Server section.
+
+Important:
+Keep options 1-4 working exactly as before. Add the new capabilities without breaking the existing BEFORE, AFTER, COMPARE, and FULL workflow.

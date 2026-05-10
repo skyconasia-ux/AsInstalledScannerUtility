@@ -1,0 +1,108 @@
+Update the Windows Server section to support all detected servers, not only the primary/main server.
+
+Current issue:
+The report shows these sections only for the primary server:
+- System Identity
+- Operating System
+- Hardware & Storage
+- Network
+- Domain
+- Installed Software
+- Windows Roles
+- SQL Server
+- Print Queues
+- Drivers & Ports
+
+Required change:
+Collect and display these same Windows Server sections for every detected server, including:
+- Primary server
+- Servers detected from Equitrac Software section
+- Servers imported from Local Collector JSON
+- Servers scanned through WinRM
+
+Do not mix all servers into one long Windows Server section.
+
+Web UI layout:
+Create a top-level section:
+
+Windows Servers
+
+Inside it, group by server:
+
+Server: CSTEMP
+- Badge: Primary / WinRM / Local Collector Import / SQL-only detected / Not scanned
+- Collapsible server card
+  - System Identity
+  - Operating System
+  - Hardware & Storage
+  - Network
+  - Domain
+  - Installed Software
+  - Windows Roles
+  - SQL Server
+  - Print Queues
+  - Drivers & Ports
+
+Server: DC02-MAIN
+- Badge: WinRM / Local Collector Import / Not scanned
+- Collapsible server card
+  - Same subsections
+
+Behavior:
+- Each server card must be expandable/collapsible.
+- Each subsection inside the server card may also be collapsible.
+- Clicking a left menu item must NOT collapse the currently opened server card.
+- Collapsed/open state should persist while navigating the left menu.
+- Do not auto-collapse everything after clicking a sidebar link.
+- Keep the selected left menu item accurate; do not select the previous section by mistake.
+
+Left menu:
+Instead of listing only:
+WINDOWS SERVER (PRIMARY)
+- System Identity
+- Operating System
+- Hardware & Storage
+...
+
+Change to:
+WINDOWS SERVERS
+- Overview
+- CSTEMP
+- DC02-MAIN
+- SQL01
+
+When clicking a server name, scroll to that server card, but do not change its expanded/collapsed state unless the user manually clicks the collapse button.
+
+If a server was detected but not scanned:
+- Still show the server card.
+- Show scan status and reason:
+  - SQL-only detected
+  - WinRM unavailable
+  - Permission denied
+  - Import file missing
+  - Import file stale
+- Do not show blank subsections as if data is missing.
+
+Data source labels:
+For each server, show:
+- Detected from: Equitrac Software section / SQL / Local Collector / WinRM
+- Scan method: Primary / WinRM / Local Collector Import / SQL-only
+- Collection timestamp
+- Status
+
+Keep raw TXT output organized the same way:
+Windows Servers
+  Server: CSTEMP
+    System Identity
+    Operating System
+    Hardware & Storage
+    ...
+  Server: DC02-MAIN
+    System Identity
+    Operating System
+    Hardware & Storage
+    ...
+
+Important:
+Do not remove the existing primary server data.
+Just restructure it so all detected servers use the same grouped/collapsible layout.
